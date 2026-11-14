@@ -1,0 +1,64 @@
+[project]
+name = "playground-serve"
+version = "0.1.0"
+description = "One command to serve an openpi robot policy (pi0.5) on a Runpod serverless GPU, and its robot client"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Playground Serve contributors" }]
+keywords = ["robotics", "openpi", "pi0.5", "vla", "runpod", "serverless", "gpu", "inference"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# The client (`from playground_serve import connect`) runs on 3.8; `pgs` says it needs 3.10 (_pgs.py).
+requires-python = ">=3.8"
+dependencies = [
+    "msgpack>=1.0.5",
+    "numpy>=1.22.4",
+    "pillow>=10.0",
+    "websockets>=13.1; python_version < '3.9'",  # 13.1 is the last release for Python 3.8
+    "websockets>=14.0; python_version >= '3.9'",
+]
+
+[project.urls]
+Homepage = "https://github.com/playground-systems/playground-serve"
+Issues = "https://github.com/playground-systems/playground-serve/issues"
+
+[project.scripts]
+pgs = "playground_serve._pgs:main"
+playground-serve = "playground_serve._pgs:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    # The real openpi client, for the client's wire-compatibility tests. It pins numpy below 2.
+    "openpi-client @ git+https://github.com/Physical-Intelligence/openpi@215abfb217dbac7d5f1273282331b9b1866c0479#subdirectory=packages/openpi-client",
+    "typing-extensions>=4.16.0",  # openpi-client imports it without declaring it
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/playground_serve"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "docs", "scripts", "README.md", "MODELS.md", "LICENSE", "NOTICE", "uv.lock"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.uv]
+# The lock (the development environment) stays on 3.10+; the client's 3.8 check uses its own venv
+# (tests/client/test_import.py says how).
+environments = ["python_version >= '3.10'"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["ignore:connect\\(\\) must be used as a context manager:DeprecationWarning:openpi_client"]
