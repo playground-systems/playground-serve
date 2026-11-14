@@ -71,6 +71,9 @@ class Config:
     # "hold" (no answer, as Runpod's gateway holds an upgrade while a worker starts). Then upgrades go through.
     upgrades: list = field(default_factory=list)
     noop_reply: bool = True  # False: no-ops get no reply, as on a worker that is gone
+    split: bool = False  # advertise and join split requests (a second socket at ?rs_aux=<session>)
+    parts: dict = field(default_factory=dict, init=False)  # (session, request number) -> future of the second frame
+    aux_frames: int = field(default=0, init=False)
     requests: int = field(default=0, init=False)
     attempts: int = field(default=0, init=False)
     noops: int = field(default=0, init=False)
@@ -87,7 +90,7 @@ class Config:
                 "downlink_mbps": self.downlink_mbps, "rtt_ms": self.rtt_ms, "net_p50_ms": self.net_p50_ms,
                 "net_p95_ms": self.net_p95_ms, "spike_prob": self.spike_prob, "spike_ms": list(self.spike_ms)}
         if not self.stock:
-            meta[self.feature_key] = {"jpeg": True, "noop": True}
+            meta[self.feature_key] = {"jpeg": True, "noop": True, **({"split": True} if self.split else {})}
         return meta
 
     def net_delay(self) -> float:
@@ -108,7 +111,19 @@ def _infer(obs) -> None:
             raise TypeError(f"observation[{key!r}] is a {type(value).__name__}; expected an array or a string")
 
 
+def _part(cfg: Config, tag) -> asyncio.Future:
+    return cfg.parts.setdefault(tuple(tag), asyncio.get_running_loop().create_future())
+
+
 async def _handler(ws: ServerConnection, cfg: Config) -> None:
+    if cfg.split and "rs_aux=" in ws.request.path:  # the second socket: frames are kept for the first, no replies
+        with contextlib.suppress(ConnectionClosed):
+            async for msg in ws:
+                part = unpackb(msg)
+                if "rs_split" in part:
+                    cfg.aux_frames += 1
+                    _part(cfg, part.pop("rs_split")).set_result(part)
+        return
     await ws.send(packb(cfg.metadata()))
     prev_total = None
     while True:
@@ -122,6 +137,10 @@ async def _handler(ws: ServerConnection, cfg: Config) -> None:
                 await asyncio.sleep(cfg.net_delay())
                 await ws.send(packb({"rs_noop": True}))
                 continue
+            if cfg.split and isinstance(obs, dict) and "rs_split" in obs:
+                tag = obs.pop("rs_split")
+                obs.update(await asyncio.wait_for(_part(cfg, tag), 5))
+                del cfg.parts[tuple(tag)]
             cfg.requests += 1
             if cfg.drop_every and cfg.requests % cfg.drop_every == 0:
                 ws.transport.abort()  # a dropped connection: no close frame, no reply

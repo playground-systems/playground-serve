@@ -1,8 +1,6 @@
 # Playground Serve wire rules
 
-For a second client (another language, or a copy that cannot import `playground_serve`): what
-`src/playground_serve/client/client.py` does. The protocol is openpi's websocket policy server (commit 215abfb) plus
-two optional features. `tests/client/test_wire_doc.py` checks the table at the end against the code.
+For a second client (another language, or a copy that cannot import `playground_serve`): what `src/playground_serve/client/client.py` does. The protocol is openpi's websocket policy server (commit 215abfb) plus two optional features. `tests/client/test_wire_doc.py` checks the table at the end against the code.
 
 ## Connect
 
@@ -40,9 +38,8 @@ Every frame is binary msgpack-numpy, except a server error: a text frame with th
 3. Server: one reply map: `actions`, an array (horizon, action_dim), for example (10, 7); `server_timing`, a map with
    `infer_ms` (the policy call, JPEG decode included) and, from the second reply on a socket, `prev_total_ms` (the
    previous request's total server time); other keys the policy adds (openpi's `policy_timing`).
-4. Repeat 2 and 3. One request in flight per socket: send the next request, no-op included, only after the reply to
-   the previous one. For parallel requests open more sockets (scaling requestCount 4, as `pgs up` sets it, admitted
-   three sockets at once on one worker).
+4. Repeat 2 and 3. One request in flight per socket: send the next request, no-op included, only after the reply to the previous one. For parallel requests open more sockets (scaling requestCount 4, as `pgs up` sets it, admitted three sockets at once on one worker).
+5. Split requests, only when the features say `"split": true` and the mode is `jpeg`: open a second socket to the same URL with the query `rs_aux=<session id>` (`SPLIT_PATH`; any random string per connection; the server sends nothing on it, not even metadata). Send every second image map, largest first, as one frame on it and the rest of the observation as the request frame, both with the extra key `SPLIT_KEY`: [session id, request number]. The server merges the two maps (it waits up to 5 s for the second frame, then answers with an error). Each frame of a LIBERO request is then under 11 kB and fits the first flight of a TCP connection that was idle; a 19.7 kB frame sent 0.2 s or more after the previous one took one more round trip of the path through Runpod's gateway (about 70 ms to US-CA-2). If the second socket fails, send whole requests on the first.
 
 msgpack-numpy, as openpi's `msgpack_numpy.py`: Python str is msgpack str, bytes is bin. A numpy array is the map
 `{b"__ndarray__": True, b"data": <bin: the bytes in C order>, b"dtype": <str: numpy dtype.str such as "<f4" or "|u1">,
@@ -113,6 +110,8 @@ and starts no worker. `running` >= 1 is warm (counted from container start, so i
 | `IMAGE_SIZE` | `224` | `client.IMAGE_SIZE` |
 | `JPEG_QUALITY` | `90` | `Policy(jpeg_quality=)` |
 | `JPEG_KEY` | `__jpeg__` | `codec.JPEG_KEY` |
+| `SPLIT_KEY` | `rs_split` | `client.SPLIT_KEY` |
+| `SPLIT_PATH` | `rs_aux` | `client.SPLIT_PATH` |
 | `HEALTH_URL` | `https://api.runpod.ai/v2/{}/health` | `resolve.HEALTH_URL` |
 | `COLD_WAIT_S` | `40, 120` | `resolve.COLD_WAIT_S` |
 | `WARM_WAIT_S` | `0, 1` | `resolve.WARM_WAIT_S` |

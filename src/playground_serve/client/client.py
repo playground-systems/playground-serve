@@ -8,7 +8,8 @@ prev_total_ms}). A text frame is a server traceback, after which the server clos
 Playground Serve extensions, used only when the metadata carries {"playground_serve": {...}} (or the older key
 "robo_serve", kept for compatibility with workers deployed before the rename): "jpeg": true means the server decodes
 jpeg-mode images (server_decode.py); "noop": true means it answers the observation {"rs_noop": true} with
-{"rs_noop": true} without running the policy, which the client sends as a keep-alive.
+{"rs_noop": true} without running the policy, which the client sends as a keep-alive; "split": true means it joins a
+request sent in two frames on two sockets (docs/WIRE.md, "Split requests").
 
 Image settings from the metadata (any server may send them):
 "image_size", [H, W] or an int, is the size the resize and jpeg modes send; "image_mode", one of MODES, is the default
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import secrets
 import socket
 import threading
 import time
@@ -30,7 +32,7 @@ from websockets.sync.client import ClientConnection
 from websockets.sync.client import connect as ws_connect
 
 from .. import __version__
-from .codec import MODES, encode_images, packb, unpackb
+from .codec import JPEG_KEY, MODES, encode_images, packb, unpackb
 
 log = logging.getLogger(__name__)
 RETRY_STATUS = {408, 429, 500, 502, 503, 504}
@@ -44,6 +46,8 @@ NOOP_TIMEOUT = 5.0
 FEATURE_KEYS = ("playground_serve", "robo_serve")
 # A connect attempt that failed quickly waits BACKOFF_S[0] before the next one, doubling up to BACKOFF_S[1].
 BACKOFF_S = (0.5, 10.0)
+SPLIT_KEY = "rs_split"  # in both frames of a split request: [session id, request number]
+SPLIT_PATH = "rs_aux"  # query key of the second socket's URL; its value is the session id
 IMAGE_SIZE = 224  # resize and jpeg modes: images go as IMAGE_SIZE x IMAGE_SIZE unless `size` or the metadata says
 # Client ping frames, without a ping timeout (the no-op is the liveness check). websockets 13.1, the last release for
 # Python 3.8, has no pings in its threading client; the server's pings are answered either way.
@@ -71,6 +75,12 @@ class Policy:
     runs, and an `infer` that starts while a no-op is in flight waits for that no-op's reply (one network round trip, no
     inference).
 
+    split: when the server advertises `split` and the mode is jpeg, a second socket carries about half of each request
+    (every second image, largest first), so that each half fits the first flight of a TCP connection that was idle.
+    Through Runpod's gateway a 19.7 kB request sent 0.2 s or more after the previous one took one more round trip of
+    the path (about 70 ms to US-CA-2); two frames of up to 11.5 kB on two sockets did not. The same bytes, the same
+    inference; False keeps one socket. If the second socket cannot be opened or fails, requests go whole on the first.
+
     open_timeout caps each upgrade attempt (and the wait for the metadata frame). Runpod's gateway holds an upgrade while
     the worker starts but does not reliably hand it over when the worker turns ready (502 or 400 well after ready), so
     short attempts, retried at once when they time out, open the socket within seconds of ready.
@@ -78,7 +88,7 @@ class Policy:
 
     def __init__(self, url: str, api_key: str | None = None, *, mode: str | None = None, size=None,
                  jpeg_quality: int = 90, open_timeout: float = 10.0, wait: float = 600.0, retries: int = 2,
-                 recv_timeout: float | None = 300.0, keepalive: float | None = 20.0) -> None:
+                 recv_timeout: float | None = 300.0, keepalive: float | None = 20.0, split: bool = True) -> None:
         if mode is not None and mode not in MODES:
             raise ValueError(f"mode must be one of {MODES} or None, not {mode!r}")
         self.url = url if url.startswith(("ws://", "wss://")) else f"ws://{url}"
@@ -86,7 +96,9 @@ class Policy:
         self.mode = mode or "resize"
         self.size, self.jpeg_quality = _height_width(size), jpeg_quality
         self.open_timeout, self.wait, self.retries, self.recv_timeout = open_timeout, wait, retries, recv_timeout
-        self.keepalive = keepalive
+        self.keepalive, self.split = keepalive, split
+        self._aux: ClientConnection | None = None  # the second socket of split requests
+        self._sid, self._seq = "", 0
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
         self._ws: ClientConnection | None = None
         self._io = threading.RLock()  # held for each request/reply pair: one request in flight on the socket
@@ -154,6 +166,8 @@ class Policy:
                 self.size = _height_width(meta.get("image_size"))
             if self.mode == "jpeg":
                 Image.preinit()  # load Pillow's JPEG plugin now (~30-50 ms) instead of in the first request
+            if self.split and self.mode == "jpeg" and self.features.get("split") is True:
+                self._open_aux()
             self._last_send = time.monotonic()
             alive = self._keepalive_thread is not None and self._keepalive_thread.is_alive()
             if self.keepalive and self.features.get("noop") is True and not alive:
@@ -162,15 +176,26 @@ class Policy:
                                                           name="playground-serve-keepalive", daemon=True)
                 self._keepalive_thread.start()
 
-    def _open(self) -> ClientConnection:
+    def _open_aux(self) -> None:
+        """The second socket, to the same URL with ?rs_aux=<a new session id>. The server sends nothing on it."""
+        self._sid, self._seq = secrets.token_hex(8), 0
+        url = f"{self.url}{'&' if '?' in self.url else '?'}{SPLIT_PATH}={self._sid}"
+        try:
+            self._aux = self._open(url)
+        except (OSError, InvalidHandshake, ConnectionClosed) as e:
+            log.warning("no second socket to %s (%r); requests go whole on one socket", self.url, e)
+
+    def _open(self, url: str | None = None) -> ClientConnection:
         # __enter__ returns the open connection in every websockets version: connect() returns the connection up to 17
         # (17.1 warns unless it is entered) and a context manager after; close() below ends it either way.
-        ws = ws_connect(self.url, additional_headers=self._headers, compression=None, max_size=None,
+        ws = ws_connect(url or self.url, additional_headers=self._headers, compression=None, max_size=None,
                         open_timeout=self.open_timeout, user_agent_header=f"playground-serve/{__version__}",
                         **PINGS).__enter__()
         try:
             # websockets 17 sets this too; set it here so it holds in older versions.
             ws.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            if url:
+                return ws
             first = ws.recv(timeout=self.open_timeout)
             if isinstance(first, str):
                 raise ConnectionError(f"{self.url} sent text instead of openpi's metadata frame: {first[:300]}")
@@ -183,21 +208,44 @@ class Policy:
     def encode(self, obs: dict) -> bytes:
         return packb(encode_images(obs, self.mode, self.size, self.jpeg_quality))
 
+    def _frames(self, obs: dict):
+        """(the request frame, the second socket's frame or None). Split: every second image, largest first, goes
+        to the second socket; both frames carry SPLIT_KEY: [session id, request number]."""
+        enc = encode_images(obs, self.mode, self.size, self.jpeg_quality)
+        if self._aux is not None and isinstance(enc, dict):
+            images = sorted((k for k, v in enc.items() if isinstance(v, dict) and v.get(JPEG_KEY) is True),
+                            key=lambda k: -len(enc[k][b"data"]))
+            if len(images) >= 2:
+                self._seq += 1
+                tag, second = [self._sid, self._seq], images[1::2]
+                return (packb({**{k: v for k, v in enc.items() if k not in second}, SPLIT_KEY: tag}),
+                        packb({**{k: enc[k] for k in second}, SPLIT_KEY: tag}))
+        return packb(enc), None
+
     def infer(self, obs: dict) -> dict:
         self._last_send = time.monotonic()  # before the lock: a keep-alive due now sees the activity and skips
         t0 = time.perf_counter()
-        mode = self.mode
-        data = self.encode(obs)
+        made = self.connects, self._aux
+        data, part = self._frames(obs)
         t1 = time.perf_counter()
         with self._io:
             for attempt in range(self.retries + 1):
                 if self._ws is None:
                     self.connect()  # has its own deadline
-                if self.mode != mode:  # a reconnect reached a server with other features
-                    mode, data = self.mode, self.encode(obs)
+                if made != (self.connects, self._aux):  # a reconnect: other features, another second socket
+                    made = self.connects, self._aux
+                    data, part = self._frames(obs)
                 try:
                     t2 = time.perf_counter()
                     self._last_send = time.monotonic()
+                    if part is not None:
+                        try:
+                            self._aux.send(part)
+                        except (ConnectionClosed, OSError) as e:  # go on with one socket
+                            log.warning("second socket to %s lost (%r); requests go whole on one socket", self.url, e)
+                            self._close_aux()
+                            made = self.connects, None
+                            data, part = self._frames(obs)
                     self._ws.send(data)
                     reply = self._ws.recv(timeout=self.recv_timeout)
                     t3 = time.perf_counter()
@@ -217,7 +265,7 @@ class Policy:
         t4 = time.perf_counter()
         server = result.get("server_timing") if isinstance(result, dict) else None
         self.timing = {
-            "payload_bytes": len(data),
+            "payload_bytes": len(data) + len(part or b""),
             "encode_ms": (t1 - t0) * 1e3,
             "rtt_ms": (t3 - t2) * 1e3,
             "infer_ms": server.get("infer_ms") if isinstance(server, dict) else None,
@@ -250,6 +298,11 @@ class Policy:
             return
         self._last_send = time.monotonic()
         try:
+            if self._aux is not None:
+                try:
+                    self._aux.send(NOOP)  # keeps the second socket in use; the server does not answer it
+                except (ConnectionClosed, OSError):
+                    self._close_aux()
             ws.send(NOOP)
             reply = ws.recv(timeout=NOOP_TIMEOUT)
             ok = not isinstance(reply, str) and isinstance(msg := unpackb(reply), dict) and msg.get("rs_noop") is True
@@ -281,8 +334,14 @@ class Policy:
     def reset(self) -> None:
         pass
 
+    def _close_aux(self) -> None:
+        aux, self._aux = self._aux, None
+        if aux is not None:
+            aux.close()
+
     def _close_ws(self) -> None:
         ws, self._ws = self._ws, None
+        self._close_aux()
         if ws is not None:
             ws.close()
 

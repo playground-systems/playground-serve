@@ -19,8 +19,13 @@ connection's open and close (code, duration, no-op count) is logged.
 
 Keep-alive, backward compatible with openpi's protocol: a message whose top-level dict holds "rs_noop": true is
 answered at once with {"rs_noop": true} and runs no inference. The metadata frame sent on connect advertises this as
-{"playground_serve": {"jpeg": true, "noop": true, "path": ..., "path_reason": ...}}, merged into the policy's own
-metadata; path is "fast" or "stock" (fastpath.py).
+{"playground_serve": {"jpeg": true, "noop": true, "split": true, "path": ..., "path_reason": ...}}, merged into the
+policy's own metadata; path is "fast" or "stock" (fastpath.py).
+
+Split requests ("split"): a client may send a request as two frames on two sockets, so that each fits the first
+flight of an idle TCP connection (client.py). The second socket's path holds "rs_aux="; its frames are kept by their
+"rs_split": [session, number] and get no reply. The request frame carries the same key; its handler waits up to
+SPLIT_WAIT_S for the other frame and merges the two maps before openpi's handler sees the request.
 
 RS_PATH=fast (boot.sh, from fastpath.py): the same server around fast_policy.FastPolicy instead of openpi's policy, JAX
 on the CPU only. The fast policy is loaded from the volume's checked copy (RS_FAST_VOLUME: model.pkl, norm stats,
@@ -105,7 +110,7 @@ class Hooks:
 
 FEATURES = {"playground_serve": {"jpeg": True, "noop": True, "path": "stock",
                                  "path_reason": os.environ.get("RS_PATH_REASON") or "stock openpi policy",
-                                 "release": os.environ.get("RS_RELEASE_ID", "")}}
+                                 "release": os.environ.get("RS_RELEASE_ID", ""), "split": True}}
 CKPT_DIR = os.environ.get("RS_CKPT_DIR")
 
 def wait_for_download(done):
@@ -252,11 +257,22 @@ import warmup  # noqa: E402  (/rs/warmup.py)
 NOOP_REPLY = msgpack_numpy.Packer().pack({"rs_noop": True})
 
 
+SPLIT_WAIT_S = 5.0
+PARTS = {}  # (session, request number) -> future of the second socket's frame; used on the server's event loop only
+
+
+def part_of(tag):
+    import asyncio  # noqa: E402
+
+    return PARTS.setdefault(tuple(tag), asyncio.get_running_loop().create_future())
+
+
 class NoopFilter:
-    """The socket as openpi's handler sees it: no-op messages are answered here and never reach the policy."""
+    """The socket as openpi's handler sees it: no-op messages are answered here and never reach the policy, and a
+    split request arrives whole."""
 
     def __init__(self, ws):
-        self._ws, self.noops = ws, 0
+        self._ws, self.noops, self.splits = ws, 0, 0
 
     def __getattr__(self, name):
         return getattr(self._ws, name)
@@ -270,6 +286,18 @@ class NoopFilter:
                     await self._ws.send(NOOP_REPLY)
                     self.noops += 1
                     continue
+            if isinstance(msg, bytes) and b"rs_split" in msg:
+                import asyncio  # noqa: E402
+
+                obs = msgpack_numpy.unpackb(msg)
+                if isinstance(obs, dict) and "rs_split" in obs:
+                    tag = obs.pop("rs_split")
+                    try:
+                        obs.update(await asyncio.wait_for(part_of(tag), SPLIT_WAIT_S))
+                    finally:
+                        PARTS.pop(tuple(tag), None)
+                    self.splits += 1
+                    return msgpack_numpy.Packer().pack(obs)
             return msg
 
 
@@ -280,10 +308,25 @@ class Server(websocket_policy_server.WebsocketPolicyServer):
             ws.keepalive_task.cancel()
         log("ws_open", path=path, peer=str(ws.remote_address), header_names=sorted(ws.request.headers.keys()))
         try:
+            if "rs_aux=" in path:  # the second socket of split requests: keep its frames, send nothing
+                try:
+                    async for msg in ws:
+                        part = msgpack_numpy.unpackb(msg) if isinstance(msg, bytes) and b"rs_split" in msg else None
+                        if isinstance(part, dict) and "rs_split" in part:
+                            if len(PARTS) > 64:  # frames whose request never came
+                                for key in [k for k, f in PARTS.items() if f.done()]:
+                                    del PARTS[key]
+                            future = part_of(part.pop("rs_split"))
+                            if not future.done():
+                                future.set_result(part)
+                            filtered.splits += 1
+                except Exception as e:  # noqa: BLE001  (the socket was cut off; its requests fall back or time out)
+                    log("ws_aux_error", error=repr(e)[:200])
+                return
             await super()._handler(filtered)
         finally:
             log("ws_close", path=path, s=round(time.time() - t, 1), code=ws.close_code, reason=ws.close_reason,
-                noops=filtered.noops)
+                noops=filtered.noops, splits=filtered.splits)
 
 
 args = serve_policy.Args(port=int(os.environ.get("PORT", "8000")),

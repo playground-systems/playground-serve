@@ -29,6 +29,8 @@ CODE = {
     "IMAGE_SIZE": client.IMAGE_SIZE,
     "JPEG_QUALITY": DEFAULTS["jpeg_quality"],
     "JPEG_KEY": codec.JPEG_KEY.decode(),
+    "SPLIT_KEY": client.SPLIT_KEY,
+    "SPLIT_PATH": client.SPLIT_PATH,
     "HEALTH_URL": resolve.HEALTH_URL,
     "COLD_WAIT_S": list(resolve.COLD_WAIT_S),
     "WARM_WAIT_S": list(resolve.WARM_WAIT_S),

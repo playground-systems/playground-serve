@@ -166,7 +166,8 @@ serve your own checkpoint of any openpi config: `pgs up CONFIG@CHECKPOINT`, for 
 the same data center. The worker scripts travel in an environment variable of the endpoint, so there is no container
 image to build. On its first start the worker installs openpi at a pinned commit, downloads the checkpoint from
 openpi's public bucket, and serves; then it saves the environment and checkpoint to the volume for later starts.
-Clients talk to it through Runpod's gateway over one websocket with openpi's wire protocol.
+Clients talk to it through Runpod's gateway over one websocket with openpi's wire protocol; the Python client sends
+each JPEG request as two halves on two sockets (`connect(..., split=False)` turns that off; [docs/WIRE.md](docs/WIRE.md)).
 
 On `pi05_libero` with an RTX 4090 (or an H200, `--gpu H200`) the worker serves the fast path: realtime-vla's Triton kernels in one CUDA graph,
 with the same bf16 weights, the same 10 flow steps and openpi's own transforms. At every start it must reproduce stock
