@@ -40,6 +40,7 @@ import re
 import secrets
 import threading
 import time
+import dataclasses
 from dataclasses import dataclass
 
 from . import __version__, region
@@ -498,11 +499,13 @@ class Launcher:
 
     # ----- up
     def up(self, model: str, *, warm: bool = False, idle_min: int = IDLE_MIN, adopt=None, new: bool = False,
-           stock_path: bool = False, dc: str | None = None) -> dict:
+           stock_path: bool = False, dc: str | None = None, gpu: str | None = None) -> dict:
         """`adopt`: True or an id, to take over another owner's resource of this model; `new`: create your own anyway;
         `stock_path`: serve openpi's own policy, not the fast path; `dc`: the data center of a new endpoint and volume
-        (default: the nearest with stock, measured)."""
+        (default: the nearest with stock, measured); `gpu`: a Runpod pool to use instead of the model's own pools."""
         spec = self._spec(model)
+        if gpu:
+            spec = dataclasses.replace(spec, gpu_pools=[gpu])
         model = spec.name
         want = workers(warm, idle_min)
         env = self._env(spec)
@@ -516,6 +519,9 @@ class Launcher:
                                             self.api.datacenters)]
             endpoints, volumes, gpus, dcs = (r.result() for r in reads)
         ep, vol, (their_eps, their_vols) = self.reconcile(model, endpoints, volumes)
+        kept = ((ep or {}).get("gpu") or {}).get("pools") or []
+        if not gpu and kept and kept[0] not in spec.gpu_pools:  # an endpoint made with --gpu keeps its pool
+            spec = dataclasses.replace(spec, gpu_pools=[kept[0], *spec.gpu_pools])
         if ep is None:
             theirs = [("endpoint", e) for e in their_eps] or ([] if vol else [("volume", v) for v in their_vols])
             if theirs and adopt:

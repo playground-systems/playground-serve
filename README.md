@@ -112,6 +112,7 @@ Options of `pgs up`:
 - `--warm` keeps one worker running (and billing) until `pgs down`.
 - `--idle MIN` sets how long a worker stays after its last request or client (default 5 minutes).
 - `--region DC` picks the data center of a new endpoint, for example `US-NC-1`.
+- `--gpu GPU` uses another GPU than the model's default pools, by name or Runpod pool, for example `H200`.
 - `--stock-path` serves openpi's own policy instead of the fast path.
 - `--adopt [ID]` and `--new`: see [Ownership](#ownership).
 
@@ -167,7 +168,7 @@ image to build. On its first start the worker installs openpi at a pinned commit
 openpi's public bucket, and serves; then it saves the environment and checkpoint to the volume for later starts.
 Clients talk to it through Runpod's gateway over one websocket with openpi's wire protocol.
 
-On `pi05_libero` with an RTX 4090 the worker serves the fast path: realtime-vla's Triton kernels in one CUDA graph,
+On `pi05_libero` with an RTX 4090 (or an H200, `--gpu H200`) the worker serves the fast path: realtime-vla's Triton kernels in one CUDA graph,
 with the same bf16 weights, the same 10 flow steps and openpi's own transforms. At every start it must reproduce stock
 openpi's stored actions for a real frame, or it serves openpi's own policy instead. `policy.metadata["playground_serve"]`
 says which path serves (`path`) and why (`path_reason`). Everywhere else the worker serves openpi's own policy.
@@ -182,7 +183,7 @@ and offers `--adopt [ID]` (take it over) or `--new` (create your own).
 ## Limits and known issues
 
 - Only `pi05_libero` has run on a GPU. All other models and custom checkpoints are untested.
-- The fast path runs only for `pi05_libero` on an RTX 4090. On the A40 and for every other model the worker runs
+- The fast path runs only for `pi05_libero` on an RTX 4090 or an H200. On the A40 and for every other model the worker runs
   stock openpi: 75 to 79 ms per inference on the RTX 4090 and about 146 ms on the A40, against 31 to 34 ms on the
   fast path.
 - A first start depends on the GPU host's download speed (12.4 GB checkpoint plus about 3.5 GB of packages).

@@ -19,8 +19,10 @@ CHECKPOINTS = "gs://openpi-assets/checkpoints/"
 GPU_POOLS = ("ADA_24", "AMPERE_48")
 # Runpod serverless list prices (USD per hour per running worker) and GPUs, read 2026-11-13 from the catalog
 # (`/catalog/gpus`); `pgs models` shows these when it has no key to read the live ones.
-POOL_PRICES = {"ADA_24": 1.34, "AMPERE_48": 1.22, "ADA_48_PRO": 1.89, "AMPERE_80": 2.99, "ADA_80_PRO": 5.89}
-POOL_GPUS = {"ADA_24": "RTX 4090", "AMPERE_48": "A40", "ADA_48_PRO": "L40S", "AMPERE_80": "A100", "ADA_80_PRO": "H100"}
+POOL_PRICES = {"ADA_24": 1.34, "AMPERE_48": 1.22, "ADA_48_PRO": 1.89, "AMPERE_80": 2.99, "ADA_80_PRO": 5.89,
+               "HOPPER_141": 6.99}
+POOL_GPUS = {"ADA_24": "RTX 4090", "AMPERE_48": "A40", "ADA_48_PRO": "L40S", "AMPERE_80": "A100", "ADA_80_PRO": "H100",
+             "HOPPER_141": "H200"}
 PRICES_READ = "2026-11-13"
 # Environment tar 8.2 GB + one checkpoint (10.1 to 11.6 GiB, read from the public bucket) + tokenizer and JAX caches
 # (a few MB) = about 21 GB. 40 GB is what pi05_libero ran with, and leaves room for a second model on the same volume.
@@ -63,6 +65,14 @@ _REGISTRY = {spec.name: spec for spec in (
     _entry("pi0_aloha_pen_uncap", "aloha"),
     _entry("pi0_aloha_sim", "aloha"),
 )}
+
+
+def pool(gpu: str) -> str:
+    """The Runpod pool for `pgs up --gpu`: a pool id (HOPPER_141) or its GPU's name (H200), in any case."""
+    for pool_id, name in POOL_GPUS.items():
+        if gpu.strip().upper().replace(" ", "") in (pool_id, name.upper().replace(" ", "")):
+            return pool_id
+    raise KeyError(f"unknown GPU {gpu!r}: use one of {', '.join(f'{n} ({p})' for p, n in POOL_GPUS.items())}")
 
 
 def names() -> list[str]:

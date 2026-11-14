@@ -69,3 +69,10 @@ def test_custom_rejects(config, checkpoint):
 
 def test_build_env_pins_the_same_openpi_commit():
     assert f"OPENPI_COMMIT=${{OPENPI_COMMIT:-{models.OPENPI_COMMIT}}}" in (WORKER / "build_env.sh").read_text()
+
+
+def test_gpu_option_names_a_pool():
+    assert models.pool("H200") == models.pool("hopper_141") == "HOPPER_141" and models.pool("rtx 4090") == "ADA_24"
+    assert models.POOL_PRICES["HOPPER_141"] == 6.99
+    with pytest.raises(KeyError, match="H200 \\(HOPPER_141\\)"):
+        models.pool("H900")

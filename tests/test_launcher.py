@@ -405,6 +405,21 @@ def test_up_switches_pool_in_the_volume_data_center_when_stock_is_gone(env):
     assert patch["gpu"]["pools"] == ["AMPERE_48"] and api.endpoints[first["endpoint"]["id"]]["dataCenterIds"] == ["US-IL-1"]
 
 
+def test_gpu_option_uses_that_pool_and_a_later_up_keeps_it(env):
+    api, launcher, out, _ = env
+    api.gpus.append({"id": "NVIDIA H200", "name": "H200 SXM", "pool": "HOPPER_141", "minRam": 188,
+                     "price": {"serverless": 6.99}, "dataCenters": [{"id": "US-TX-3", "availability": "LOW"}]})
+    first = launcher().up("pi05_libero", gpu="HOPPER_141", dc="US-TX-3")
+    body = api.creates()[1][1]
+    assert body["gpu"]["pools"] == ["HOPPER_141"] and body["dataCenterIds"] == ["US-TX-3"]
+    assert "6.99 USD/hr" in "\n".join(out)
+    launcher().down()
+    launcher().up("pi05_libero")  # without --gpu: stays on the pool it was created with
+    assert api.endpoints[first["endpoint"]["id"]]["gpu"]["pools"] == ["HOPPER_141"]
+    assert not any("gpu" in c[2] for c in api.calls if c[0] == "update_endpoint")
+    assert "No serverless stock" not in "\n".join(out)
+
+
 def test_endpoint_deleted_outside_the_tool_is_forgotten_and_recreated_on_the_same_volume(env):
     api, launcher, out, path = env
     first = launcher().up("pi05_libero")
@@ -888,6 +903,7 @@ def test_cli_flags():
     assert p.parse_args(["up", "pi05_libero", "--adopt"]).adopt is True
     assert p.parse_args(["up", "pi05_libero", "--adopt", "ep123"]).adopt == "ep123"
     assert p.parse_args(["delete", "pi05_libero", "--force", "--volume"]).force is True
+    assert a.gpu is None and p.parse_args(["up", "pi05_libero", "--gpu", "H200"]).gpu == "H200"
     with pytest.raises(SystemExit):
         p.parse_args(["up", "pi05_libero", "--adopt", "--new"])
     with pytest.raises(SystemExit):

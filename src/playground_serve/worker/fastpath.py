@@ -28,7 +28,8 @@ import time
 # (docs/BENCHMARKS.md: RTX 4090, served infer_ms 31 to 34 ms against 75 to 79 for stock). Not here: the RTX 5090
 # (needs torch's cu128 build swapped into the shared environment), the L40S and H100 (measured in-process only, and not
 # in any model's GPU pools), the A40 (not measured).
-FAST = {"pi05_libero": ("NVIDIA GeForce RTX 4090",)}
+# The H200 (`pgs up --gpu H200`): served infer_ms and agreement in docs/BENCHMARKS.md.
+FAST = {"pi05_libero": ("NVIDIA GeForce RTX 4090", "NVIDIA H200")}
 RTVLA_REPO = "https://github.com/dexmal/realtime-vla.git"
 RTVLA_COMMIT = "eb46c8d"
 FALLBACK_EXIT = 3  # serve.py in fast mode: the fast path is not usable here; boot.sh starts the stock path
