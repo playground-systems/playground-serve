@@ -54,5 +54,6 @@ def setup(environ=os.environ):
 
 
 def allowed(header, token: str) -> bool:
-    """Whether an upgrade's Authorization header carries the token."""
-    return hmac.compare_digest((header or "").encode(), f"Bearer {token}".encode())
+    """Whether an upgrade's Authorization header carries the token. websockets 13 decodes header bytes outside ASCII
+    as surrogates; surrogateescape turns them back into bytes, so such a header is refused instead of raising."""
+    return hmac.compare_digest((header or "").encode("utf-8", "surrogateescape"), f"Bearer {token}".encode())
