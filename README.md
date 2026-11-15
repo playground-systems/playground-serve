@@ -186,14 +186,15 @@ requests there. The gateway socket stays open: it starts and keeps the worker, c
 requests again if the direct connection cannot be opened or is lost. Nothing changes in billing, scale to zero or
 start time.
 
-- Measured from the US east coast to an RTX 4090 in US-CA-2 (California): round trip p50 113.2 ms direct against
-  123.2 ms through the gateway, p95 120.3 against 133.3 (same worker, alternating blocks; docs/BENCHMARKS.md).
+- Measured from the US east coast to an RTX 4090 in US-CA-2 (California), with `hot=True` (below): round trip p50
+  111.6 ms direct against 124.8 ms through the gateway, p95 119.5 against 133.8 (same worker, alternating blocks;
+  [docs/BENCHMARKS.md](docs/BENCHMARKS.md)).
 - What you give up: the direct connection does not pass Cloudflare or Runpod's load balancer. It needs outbound TCP
   to a high port of a plain IP address (some company networks block that; the client then stays on the gateway), its
   TLS certificate is the worker's own (pinned by the client, not signed by a public authority), and the port is open
   to the internet behind the token. `connect(..., direct=False)` keeps a client on the gateway.
 - `connect(..., hot=True)` (any endpoint) asks the worker not to let its thread or GPU idle for about a second after
-  each request: 2.3 to 2.7 ms less model time per request at a remote client's pace on an RTX 4090. The worker's CPU
+  each request: 2.3 ms less model time per request at a remote client's pace on an RTX 4090. The worker's CPU
   core and GPU stay busy meanwhile (the GPU draws power as if it were working), so it is off by default.
 
 ### Ownership

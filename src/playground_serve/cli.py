@@ -72,7 +72,7 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--stock-path", action="store_true", help="serve openpi's own policy instead of the fast path "
                    "(realtime-vla graph, the default for pi05_libero on an RTX 4090; same weights, checked at boot)")
     s.add_argument("--direct", action="store_true", help="also serve on a TCP port of the worker's own public address, "
-                   "so requests skip Runpod's gateway (about 14 ms less per request from the US east coast to "
+                   "so requests skip Runpod's gateway (about 11 ms less per request from the US east coast to "
                    "US-CA-2); TLS with the worker's own certificate, no Cloudflare in front; still serverless")
     g = s.add_mutually_exclusive_group()
     g.add_argument("--adopt", nargs="?", const=True, metavar="ID", help="take over this model's endpoint that another "

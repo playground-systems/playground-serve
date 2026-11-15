@@ -90,13 +90,13 @@ class Policy:
 
     direct: when the server advertises a direct port (an endpoint made with `pgs up --direct`), requests and replies
     go over a second connection straight to the worker's public address (TLS with the worker's own certificate, which
-    the metadata carries, and its token) instead of through Runpod's gateway: about 14 ms less per request from the US
+    the metadata carries, and its token) instead of through Runpod's gateway: about 11 ms less per request from the US
     east coast to US-CA-2. The gateway socket stays open: it keeps the worker running, carries the keep-alive, and
     takes the requests again if the direct connection cannot be opened or is lost. False never opens it. `timing`
     says which path a request took ("path": "direct" or "gateway").
 
     hot: True asks the worker to stay hot between this client's requests (its thread polls instead of sleeping and, on
-    the fast path, the GPU does not idle; for about a second after each request): 2.3 to 2.7 ms less model time per
+    the fast path, the GPU does not idle; for about a second after each request): 2.3 ms less model time per
     request on an RTX 4090 at the pace of a remote client. The worker's CPU core and GPU are busy meanwhile, so it is
     off by default; the model's computation is the same.
 
