@@ -76,7 +76,7 @@ clean (under 2 % late router echoes in all but 2 blocks). 95 % intervals from a 
   kernel run back to back in the gaps prevents it, one kernel per millisecond or a 64 x 64 one did not hold at 5
   requests per second) and 0.8 ms in the host-side steps (the server's thread polls instead of sleeping).
 - The first request after 15 to 40 s without one took 111.8 and 114.4 ms on the direct port (p50 of 20 each).
-- Loss on the direct path: in two of four earlier runs of 5 to 7 minutes, 1 to 2 % of the direct requests took about
+- Loss on the direct path: in four earlier runs of 4 to 7 minutes, 0.3 to 2 % of the direct requests took about
   385 ms: the reply is one packet, and when it is lost the worker's TCP waits a whole retransmission timeout (275
   ms). In the run above it happened once in 2000 requests. A ping frame sent behind every reply (`rs_probe` in the
   URL) cut such requests to about 205 ms but made every round trip 2.5 ms longer, so it is off.
