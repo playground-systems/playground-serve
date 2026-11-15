@@ -118,8 +118,8 @@ def test_serve_py_on_cpu(name, tmp_path):
             except queue.Empty:
                 continue
             output.append(line)
-            if line.startswith("{"):
-                record = json.loads(line)
+            if line.startswith("{"):  # print writes the line's end separately: a stderr line may follow at once
+                record = json.JSONDecoder().raw_decode(line)[0]
                 log[record.get("rs") or next(iter(record))] = record
     finally:
         proc.kill()
@@ -137,5 +137,5 @@ def test_serve_py_on_cpu(name, tmp_path):
     selftest = log["selftest_ws"]
     assert selftest["actions_shape"] == ACTIONS[name]
     assert selftest["noop_reply"] == "{'rs_noop': True}"
-    assert "'playground_serve': {'jpeg': True, 'noop': True, 'path': 'stock'" in selftest["metadata"]
+    assert "'playground_serve': {'jpeg': True, 'noop': True, 'hot': True, 'path': 'stock'" in selftest["metadata"]
     assert log["ready"]["path"] == "stock"  # RS_PATH unset: the stock openpi policy
