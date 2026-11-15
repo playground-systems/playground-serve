@@ -1,6 +1,6 @@
 # Measured numbers
 
-All numbers are for `pi05_libero`, measured on Runpod Serverless on 2026-11-13 and 2026-11-14 with the code in this
+All numbers are for `pi05_libero`, measured on Runpod Serverless from 2026-11-13 to 2026-11-15 with the code in this
 repository or its direct predecessors. They are small samples from one client location. Your numbers will differ with
 the GPU host, the data center, and your network. Lines marked "estimate" were not measured.
 
@@ -55,6 +55,34 @@ after 3 warm-up requests.
   server's model time rose during that run; the cause was not found.
 - Sending images without JPEG (`resize` mode, about 300 kB per request) did not reach a 100 ms p95 from this client.
 
+## Direct port and `hot`, far from the robot
+
+RTX 4090 in US-CA-2 (California), client on home Wi-Fi on the US east coast, 2026-11-15, one worker reached two ways
+in alternating blocks of 50 requests on the same link (40 rounds, 1000 requests per path and pacing): through its
+direct port with `connect(..., hot=True)` (`pgs up --direct`), and through Runpod's gateway (the default). The link was
+clean (under 2 % late router echoes in all but 2 blocks). 95 % intervals from a block bootstrap.
+
+| Path | p50 back to back (ms) | p95 | p99 | p50 at 5 per second | p95 | p99 | model time p50 | network part p50 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Direct port, `hot=True` | 111.6 | 119.5 | 125.2 | 111.7 | 119.8 | 128.0 | 31.7 | 79.8 |
+| Gateway (default) | 124.8 | 133.8 | 187.7 | 125.2 | 138.7 | 200.3 | 33.9 | 91.0 |
+
+- Direct port with `hot` against the gateway, paired by round: 13.2 ms less at p50 back to back (12.3 to 14.1) and
+  13.5 ms at 5 per second (12.8 to 14.1), in 20 of 20 rounds each. About 11 ms of it is the path (the gateway adds a
+  Cloudflare edge and Runpod's load balancer; TCP connect time to the worker's own address was 75 ms, a small message
+  through the gateway took 84 ms), 2.3 ms is `hot` (model time 31.7 against 33.9 to 34.0 ms).
+- Why `hot` helps: at a remote client's pace the worker waits about 80 ms between requests, and the next request
+  then runs slower than back to back: 1.5 ms in the CUDA graph (the GPU slows down when it is mostly idle; a small
+  kernel run back to back in the gaps prevents it, one kernel per millisecond or a 64 x 64 one did not hold at 5
+  requests per second) and 0.8 ms in the host-side steps (the server's thread polls instead of sleeping).
+- The first request after 15 to 40 s without one took 111.8 and 114.4 ms on the direct port (p50 of 20 each).
+- Loss on the direct path: in four earlier runs of 4 to 7 minutes, 0.3 to 2 % of the direct requests took about
+  385 ms: the reply is one packet, and when it is lost the worker's TCP waits a whole retransmission timeout (275
+  ms). In the run above it happened once in 2000 requests. A ping frame sent behind every reply (`rs_probe` in the
+  URL) cut such requests to about 205 ms but made every round trip 2.5 ms longer, so it is off.
+- A later start of a worker hung on its first read of the network volume in US-CA-2 in 2 of 5 release changes that
+  day (12 minutes once, never ready once); a first start on a new volume took 1:15 to 3:54.
+
 ## Model time per GPU
 
 Model time = observation in to actions out on the GPU worker, without the network.
@@ -67,8 +95,9 @@ Model time = observation in to actions out on the GPU worker, without the networ
 | L40S | 72.5 | 33.2 | Runpod pod, in-process only |
 | H100 80GB | 52.1 | 20.6 | Runpod pod, in-process only |
 
-- `pgs` uses the RTX 4090 pool first and the A40 pool second. The fast path runs only on the RTX 4090. The RTX 5090,
-  L40S and H100 rows are not reachable through `pgs` today; they are listed for comparison.
+- `pgs` uses the RTX 4090 pool first and the A40 pool second. `pgs up --gpu` picks another pool (L40S, A100, H100 or
+  H200); there the worker serves stock openpi, except on the H200, which also has the fast path. No H200 numbers are
+  listed here yet. The RTX 5090 is not reachable through `pgs`; its row and the in-process rows are for comparison.
 - Runpod list prices read 2026-11-13, per hour while a worker runs: RTX 4090 1.34 USD, A40 1.22 USD.
 
 ## Same policy on the fast path

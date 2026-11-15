@@ -19,8 +19,13 @@ connection's open and close (code, duration, no-op count) is logged.
 
 Keep-alive, backward compatible with openpi's protocol: a message whose top-level dict holds "rs_noop": true is
 answered at once with {"rs_noop": true} and runs no inference. The metadata frame sent on connect advertises this as
-{"playground_serve": {"jpeg": true, "noop": true, "path": ..., "path_reason": ...}}, merged into the policy's own
-metadata; path is "fast" or "stock" (fastpath.py).
+{"playground_serve": {"jpeg": true, "noop": true, "split": true, "path": ..., "path_reason": ...}}, merged into the
+policy's own metadata; path is "fast" or "stock" (fastpath.py).
+
+Split requests ("split"): a client may send a request as two frames on two sockets, so that each fits the first
+flight of an idle TCP connection (client.py). The second socket's path holds "rs_aux="; its frames are kept by their
+"rs_split": [session, number] and get no reply. The request frame carries the same key; its handler waits up to
+SPLIT_WAIT_S for the other frame and merges the two maps before openpi's handler sees the request.
 
 RS_PATH=fast (boot.sh, from fastpath.py): the same server around fast_policy.FastPolicy instead of openpi's policy, JAX
 on the CPU only. The fast policy is loaded from the volume's checked copy (RS_FAST_VOLUME: model.pkl, norm stats,
@@ -33,6 +38,15 @@ first start serves, realtime-vla's own converter writes model.pkl into RS_FAST_D
 failure before ready logs fast_failed,
 writes the reason to fastpath.REASON_FILE and exits with fastpath.FALLBACK_EXIT; boot.sh then starts this file again
 with RS_PATH=stock and RS_PATH_REASON.
+
+Hot ("hot"): a connection whose path holds "rs_hot" (the client's `hot=True`) keeps the server hot between its
+requests (keep_hot). Measurement hooks: "rs_hot=N" picks another keep-warm kernel, "rs_probe" adds a ping frame
+behind every reply (NoopFilter.send).
+
+Direct port (direct.py, `pgs up --direct`): with RS_DIRECT set and a public TCP port mapped by Runpod, the same handler
+also listens there on the same event loop (one inference at a time, as before) behind TLS with a certificate made at
+boot and a token; the metadata advertises {"direct": {"host", "port", "cert", "token"}} and the logs never hold the
+token.
 
 The metadata's "release" is RS_RELEASE_ID, the digest of the endpoint's env map that `pgs up` set: `pgs up` reports
 ready only once the worker it reaches sends the id it just set.
@@ -103,9 +117,9 @@ class Hooks:
         return getattr(self._policy, name)
 
 
-FEATURES = {"playground_serve": {"jpeg": True, "noop": True, "path": "stock",
+FEATURES = {"playground_serve": {"jpeg": True, "noop": True, "hot": True, "path": "stock",
                                  "path_reason": os.environ.get("RS_PATH_REASON") or "stock openpi policy",
-                                 "release": os.environ.get("RS_RELEASE_ID", "")}}
+                                 "release": os.environ.get("RS_RELEASE_ID", ""), "split": True}}
 CKPT_DIR = os.environ.get("RS_CKPT_DIR")
 
 def wait_for_download(done):
@@ -252,14 +266,84 @@ import warmup  # noqa: E402  (/rs/warmup.py)
 NOOP_REPLY = msgpack_numpy.Packer().pack({"rs_noop": True})
 
 
-class NoopFilter:
-    """The socket as openpi's handler sees it: no-op messages are answered here and never reach the policy."""
+SPLIT_WAIT_S = 5.0
+PARTS = {}  # (session, request number) -> future of the second socket's frame; used on the server's event loop only
 
-    def __init__(self, ws):
-        self._ws, self.noops = ws, 0
+
+def part_of(tag):
+    import asyncio  # noqa: E402
+
+    return PARTS.setdefault(tuple(tag), asyncio.get_running_loop().create_future())
+
+
+HOT_S = 1.0  # how long the server stays hot after a request on a connection that asked for it ("rs_hot" in its path)
+# The GPU kernel that runs while hot: (side of a bf16 matmul, how many per turn). "rs_hot=1" (the client's hot=True) is
+# the first; the others are measurement hooks ("rs_hot=2" ...), as is "rs_probe" (a ping frame behind every reply).
+HOT_TICKS = {1: (2048, 1), 2: (64, 1), 3: (2048, 2), 4: (4096, 1), 5: (1024, 2), 6: (512, 4)}
+HOT = {"until": 0.0, "on": False, "level": 1, "ticks": {}}
+
+
+def gpu_tick(n, depth):
+    """`depth` GPU kernels (n x n matmuls) on their own stream, started only when the previous ones are done."""
+    import torch  # noqa: E402
+
+    x = torch.randn(n, n, device="cuda", dtype=torch.bfloat16)
+    y, stream, last = torch.empty_like(x), torch.cuda.Stream(), [None]
+
+    def tick():
+        if last[0] is None or last[0].query():
+            with torch.cuda.stream(stream):
+                for _ in range(depth):
+                    torch.mm(x, x, out=y)
+                last[0] = torch.cuda.Event()
+                last[0].record(stream)
+
+    return tick
+
+
+def keep_hot(level=1):
+    """Stay hot for HOT_S more seconds: the server's thread polls its sockets instead of sleeping, and on the fast path
+    the GPU runs a small kernel back to back while no request is being served. After the 80 ms a remote client leaves
+    between two requests, the same request took 2.3 ms longer than back to back on an RTX 4090 (1.5 ms in the CUDA
+    graph: the GPU slows down when it is mostly idle; 0.8 ms in the host-side steps); kept hot, it does not. One CPU
+    core is busy meanwhile and the GPU does not idle. The model's own computation is untouched."""
+    import asyncio  # noqa: E402
+
+    loop = asyncio.get_running_loop()
+    HOT["until"], HOT["level"] = loop.time() + HOT_S, level
+
+    def turn():
+        if loop.time() < HOT["until"]:
+            tick = HOT["ticks"].get(HOT["level"])
+            if tick is not None:
+                tick()
+            loop.call_soon(turn)
+        else:
+            HOT["on"] = False
+
+    if not HOT["on"]:
+        HOT["on"] = True
+        loop.call_soon(turn)
+
+
+class NoopFilter:
+    """The socket as openpi's handler sees it: no-op messages are answered here and never reach the policy, and a
+    split request arrives whole."""
+
+    def __init__(self, ws, hot=0, probe=False):
+        self._ws, self.noops, self.splits, self._hot, self._probe = ws, 0, 0, hot, probe
 
     def __getattr__(self, name):
         return getattr(self._ws, name)
+
+    async def send(self, data):
+        """A reply, and with "rs_probe" in the path a ping frame right after it: a second packet behind the reply's
+        one. On the direct port a reply whose only packet was lost came 275 ms late (the server's TCP waits a whole
+        retransmission timeout when nothing follows the lost packet); with the ping behind it, about 90 ms late. But
+        every round trip then took 2.5 ms longer (cause not found), so it is off unless asked for."""
+        await self._ws.send(data)
+        if self._probe:
+            await self._ws.ping()
 
     async def recv(self):
         while True:
@@ -270,20 +354,75 @@ class NoopFilter:
                     await self._ws.send(NOOP_REPLY)
                     self.noops += 1
                     continue
+            if self._hot:  # a request, not a keep-alive
+                keep_hot(self._hot)
+            if isinstance(msg, bytes) and b"rs_split" in msg:
+                import asyncio  # noqa: E402
+
+                obs = msgpack_numpy.unpackb(msg)
+                if isinstance(obs, dict) and "rs_split" in obs:
+                    tag = obs.pop("rs_split")
+                    try:
+                        obs.update(await asyncio.wait_for(part_of(tag), SPLIT_WAIT_S))
+                    finally:
+                        PARTS.pop(tuple(tag), None)
+                    self.splits += 1
+                    return msgpack_numpy.Packer().pack(obs)
             return msg
 
 
+DIRECT = None  # (advertised map, TLS context, container port) of the direct port, set before the server starts
+
+
 class Server(websocket_policy_server.WebsocketPolicyServer):
+    async def run(self):
+        if DIRECT is None:
+            return await super().run()
+        import asyncio  # noqa: E402
+        import http  # noqa: E402
+
+        info, context, port = DIRECT
+
+        def check(connection, request):
+            if not direct.allowed(request.headers.get("Authorization"), info["token"]):
+                return connection.respond(http.HTTPStatus.UNAUTHORIZED, "Unauthorized\n")
+            return None
+
+        serve = websocket_policy_server._server.serve
+        async with serve(self._handler, self._host, self._port, compression=None, max_size=None,
+                         process_request=websocket_policy_server._health_check), \
+                serve(self._handler, self._host, port, compression=None, max_size=None, ssl=context,
+                      process_request=check):
+            await asyncio.Future()
+
     async def _handler(self, ws):
-        t, path, filtered = time.time(), ws.request.path, NoopFilter(ws)
+        t, path = time.time(), ws.request.path
+        level = re.search(r"rs_hot=(\d)", path)
+        level = int(level.group(1)) if level and int(level.group(1)) in HOT_TICKS else 1 if "rs_hot" in path else 0
+        filtered = NoopFilter(ws, hot=level, probe="rs_probe" in path)
         if "noping" in path and ws.keepalive_task is not None:
             ws.keepalive_task.cancel()
         log("ws_open", path=path, peer=str(ws.remote_address), header_names=sorted(ws.request.headers.keys()))
         try:
+            if "rs_aux=" in path:  # the second socket of split requests: keep its frames, send nothing
+                try:
+                    async for msg in ws:
+                        part = msgpack_numpy.unpackb(msg) if isinstance(msg, bytes) and b"rs_split" in msg else None
+                        if isinstance(part, dict) and "rs_split" in part:
+                            if len(PARTS) > 64:  # frames whose request never came
+                                for key in [k for k, f in PARTS.items() if f.done()]:
+                                    del PARTS[key]
+                            future = part_of(part.pop("rs_split"))
+                            if not future.done():
+                                future.set_result(part)
+                            filtered.splits += 1
+                except Exception as e:  # noqa: BLE001  (the socket was cut off; its requests fall back or time out)
+                    log("ws_aux_error", error=repr(e)[:200])
+                return
             await super()._handler(filtered)
         finally:
             log("ws_close", path=path, s=round(time.time() - t, 1), code=ws.close_code, reason=ws.close_reason,
-                noops=filtered.noops)
+                noops=filtered.noops, splits=filtered.splits)
 
 
 args = serve_policy.Args(port=int(os.environ.get("PORT", "8000")),
@@ -360,6 +499,20 @@ if FAST:  # once more in the state that will serve: after the server's imports a
         f"realtime-vla graph on {gpu.split(',')[0]}, same bf16 weights; boot self-test passed (max "
         f"{detail['max_abs_diff']}, mean {detail['mean_abs_diff']} against stock openpi's stored actions)"))
 
+if FAST:  # stock openpi keeps its GPU work in JAX: there only the server's thread stays hot
+    try:
+        HOT["ticks"] = {level: gpu_tick(*shape) for level, shape in HOT_TICKS.items()}
+    except Exception as e:  # noqa: BLE001
+        log("hot_tick_failed", error=repr(e)[:300])
+import direct  # noqa: E402  (/rs/direct.py)
+
+try:
+    DIRECT = direct.setup()
+except Exception as e:  # noqa: BLE001  (no openssl, no mapped port: serve through the gateway only)
+    log("direct_failed", error=repr(e)[:300])
+if DIRECT is not None:
+    FEATURES["playground_serve"]["direct"] = DIRECT[0]
+    log("direct", host=DIRECT[0]["host"], port=DIRECT[0]["port"], container_port=DIRECT[2])
 server = Server(policy=policy, host="0.0.0.0", port=args.port, metadata={**(policy.metadata or {}), **FEATURES})
 threading.Thread(target=server.serve_forever, daemon=True).start()
 while True:
@@ -386,6 +539,7 @@ with connect(f"ws://127.0.0.1:{args.port}/ws", compression=None, max_size=None) 
     t = time.time()
     ws.send(msgpack_numpy.Packer().pack({"rs_noop": True}))
     noop = msgpack_numpy.unpackb(ws.recv())
+    meta.get("playground_serve", {}).pop("direct", None)  # holds the token: never in a log
     log("selftest_ws", metadata=str(meta)[:200], actions_shape=list(out["actions"].shape), calls=rows,
         noop_reply=str(noop), noop_ms=round((time.time() - t) * 1000, 2))
 

@@ -67,8 +67,13 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--region", metavar="DC", help="data center for a new endpoint and volume, e.g. US-NC-1 (default: "
                    "the nearest with stock: by the round trip a short-lived probe per data center measured in the last "
                    "day, else by this machine's time zone; the probe runs while the worker starts)")
+    s.add_argument("--gpu", metavar="GPU", help="GPU for the endpoint instead of the model's default pools, by name or "
+                   "Runpod pool, e.g. H200 or HOPPER_141 (`pgs up` prints its price before it creates anything)")
     s.add_argument("--stock-path", action="store_true", help="serve openpi's own policy instead of the fast path "
                    "(realtime-vla graph, the default for pi05_libero on an RTX 4090; same weights, checked at boot)")
+    s.add_argument("--direct", action="store_true", help="also serve on a TCP port of the worker's own public address, "
+                   "so requests skip Runpod's gateway (about 11 ms less per request from the US east coast to "
+                   "US-CA-2); TLS with the worker's own certificate, no Cloudflare in front; still serverless")
     g = s.add_mutually_exclusive_group()
     g.add_argument("--adopt", nargs="?", const=True, metavar="ID", help="take over this model's endpoint that another "
                    "owner (or a `pgs` from before owner ids) created")
@@ -123,8 +128,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         launcher = Launcher(RunpodApi(key), state.default_path(), out=say)
         if args.command == "up":
+            from . import models
+
+            try:
+                gpu = models.pool(args.gpu) if args.gpu else None
+            except KeyError as e:
+                raise LauncherError(str(e).strip("'\"")) from None
             launcher.up(args.model, warm=args.warm, idle_min=args.idle, adopt=args.adopt, new=args.new,
-                        stock_path=args.stock_path, dc=args.region)
+                        stock_path=args.stock_path, dc=args.region, gpu=gpu, direct=args.direct)
         elif args.command == "down":
             launcher.down(args.model)
         elif args.command == "status":

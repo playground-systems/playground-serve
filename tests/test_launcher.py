@@ -11,7 +11,7 @@ import msgpack
 import pytest
 
 from playground_serve import cli, state
-from playground_serve.launcher import RELEASE_KEY, Launcher, LauncherError, candidates, release_id
+from playground_serve.launcher import RELEASE, RELEASE_KEY, Launcher, LauncherError, candidates, release_id
 from playground_serve.runpod_api import ApiError
 
 NAME = re.compile(r"playground-serve-o[0-9a-f]{8}-pi05-libero-[0-9a-f]{6}")
@@ -403,6 +403,44 @@ def test_up_switches_pool_in_the_volume_data_center_when_stock_is_gone(env):
     launcher().up("pi05_libero")
     patch = [c for c in api.calls if c[0] == "update_endpoint"][-2][2]
     assert patch["gpu"]["pools"] == ["AMPERE_48"] and api.endpoints[first["endpoint"]["id"]]["dataCenterIds"] == ["US-IL-1"]
+
+
+def test_gpu_option_uses_that_pool_and_a_later_up_keeps_it(env):
+    api, launcher, out, _ = env
+    api.gpus.append({"id": "NVIDIA H200", "name": "H200 SXM", "pool": "HOPPER_141", "minRam": 188,
+                     "price": {"serverless": 6.99}, "dataCenters": [{"id": "US-TX-3", "availability": "LOW"}]})
+    first = launcher().up("pi05_libero", gpu="HOPPER_141", dc="US-TX-3")
+    body = api.creates()[1][1]
+    assert body["gpu"]["pools"] == ["HOPPER_141"] and body["dataCenterIds"] == ["US-TX-3"]
+    assert "6.99 USD/hr" in "\n".join(out)
+    launcher().down()
+    launcher().up("pi05_libero")  # without --gpu: stays on the pool it was created with
+    assert api.endpoints[first["endpoint"]["id"]]["gpu"]["pools"] == ["HOPPER_141"]
+    assert not any("gpu" in c[2] for c in api.calls if c[0] == "update_endpoint")
+    assert "No serverless stock" not in "\n".join(out)
+
+
+def test_direct_option_adds_the_port_and_env_and_a_later_up_keeps_them(env):
+    api, launcher, out, _ = env
+    first = launcher().up("pi05_libero", direct=True)
+    body = api.creates()[1][1]
+    assert body["ports"] == ["8000/http", "8001/http", "8002/tcp"]
+    assert body["env"] == released({**make_env(FakeSpec(), RELEASE), "RS_DIRECT": "8002"})
+    assert any(line.startswith("Direct port: on") for line in out)
+    launcher().down()
+    calls = len(api.calls)
+    launcher().up("pi05_libero")  # without --direct: the endpoint keeps its port and its release
+    ep = api.endpoints[first["endpoint"]["id"]]
+    assert ep["ports"][-1] == "8002/tcp" and ep["env"]["RS_DIRECT"] == "8002"
+    assert not any("env" in c[2] or "ports" in c[2] for c in api.calls[calls:] if c[0] == "update_endpoint")
+
+
+def test_without_direct_the_endpoint_is_as_before(env):
+    api, launcher, out, _ = env
+    launcher().up("pi05_libero")
+    body = api.creates()[1][1]
+    assert body["ports"] == ["8000/http", "8001/http"] and "RS_DIRECT" not in body["env"]
+    assert not any(line.startswith("Direct port") for line in out)
 
 
 def test_endpoint_deleted_outside_the_tool_is_forgotten_and_recreated_on_the_same_volume(env):
@@ -888,6 +926,7 @@ def test_cli_flags():
     assert p.parse_args(["up", "pi05_libero", "--adopt"]).adopt is True
     assert p.parse_args(["up", "pi05_libero", "--adopt", "ep123"]).adopt == "ep123"
     assert p.parse_args(["delete", "pi05_libero", "--force", "--volume"]).force is True
+    assert a.gpu is None and p.parse_args(["up", "pi05_libero", "--gpu", "H200"]).gpu == "H200"
     with pytest.raises(SystemExit):
         p.parse_args(["up", "pi05_libero", "--adopt", "--new"])
     with pytest.raises(SystemExit):

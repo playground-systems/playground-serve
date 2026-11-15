@@ -112,7 +112,12 @@ Options of `pgs up`:
 - `--warm` keeps one worker running (and billing) until `pgs down`.
 - `--idle MIN` sets how long a worker stays after its last request or client (default 5 minutes).
 - `--region DC` picks the data center of a new endpoint, for example `US-NC-1`.
+- `--gpu GPU` uses another GPU than the model's default pools, by name or Runpod pool, for example `H200`. It bills
+  that GPU's price (H200 6.99 USD/hr against 1.34 for the RTX 4090, list prices read 2026-11-13), only the RTX 4090
+  and the H200 get the fast path (other GPUs serve stock openpi), and the endpoint keeps that GPU on a later `pgs up`.
 - `--stock-path` serves openpi's own policy instead of the fast path.
+- `--direct` also serves on a TCP port of the worker's own public address; the Python client then sends its requests
+  there instead of through Runpod's gateway (see [Direct port](#direct-port)).
 - `--adopt [ID]` and `--new`: see [Ownership](#ownership).
 
 ## Costs and when it bills
@@ -165,12 +170,37 @@ serve your own checkpoint of any openpi config: `pgs up CONFIG@CHECKPOINT`, for 
 the same data center. The worker scripts travel in an environment variable of the endpoint, so there is no container
 image to build. On its first start the worker installs openpi at a pinned commit, downloads the checkpoint from
 openpi's public bucket, and serves; then it saves the environment and checkpoint to the volume for later starts.
-Clients talk to it through Runpod's gateway over one websocket with openpi's wire protocol.
+Clients talk to it through Runpod's gateway over one websocket with openpi's wire protocol; the Python client sends
+each JPEG request as two halves on two sockets (`connect(..., split=False)` turns that off; [docs/WIRE.md](docs/WIRE.md)).
 
-On `pi05_libero` with an RTX 4090 the worker serves the fast path: realtime-vla's Triton kernels in one CUDA graph,
+On `pi05_libero` with an RTX 4090 (or an H200, `--gpu H200`) the worker serves the fast path: realtime-vla's Triton kernels in one CUDA graph,
 with the same bf16 weights, the same 10 flow steps and openpi's own transforms. At every start it must reproduce stock
 openpi's stored actions for a real frame, or it serves openpi's own policy instead. `policy.metadata["playground_serve"]`
 says which path serves (`path`) and why (`path_reason`). Everywhere else the worker serves openpi's own policy.
+
+### Direct port
+
+`pgs up MODEL --direct` (an endpoint made with it keeps it) also lists a TCP port on the endpoint. Runpod gives a
+serverless worker a public address and maps that port to it; the worker serves the same protocol there behind TLS,
+with a certificate and a token it makes at every boot and sends in its metadata. The Python client reads them through
+the gateway socket (which checked your API key), opens a second connection straight to the worker and sends its
+requests there. The gateway socket stays open: it starts and keeps the worker, carries the keep-alive, and takes the
+requests again if the direct connection cannot be opened or is lost. Nothing changes in billing, scale to zero or
+start time.
+
+- Measured from the US east coast to an RTX 4090 in US-CA-2 (California), same worker, alternating blocks of
+  requests: the direct port saved about 10 to 12.6 ms per request against the gateway path, and `hot=True` (below)
+  2.3 ms more. Round trip p50 111.6 ms direct with `hot` against 124.8 ms through the gateway, p95 119.5 against
+  133.8 ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)).
+- What you give up: the direct connection does not pass Cloudflare or Runpod's load balancer. It needs outbound TCP
+  to a high port of a plain IP address (some company networks block that; the client then stays on the gateway), its
+  TLS certificate is the worker's own (pinned by the client, not signed by a public authority), and the port is open
+  to the internet behind the token. A reply is one packet: when it is lost, the worker's TCP waits a whole
+  retransmission timeout and that request takes about 385 ms (0.3 to 2 % of direct requests in earlier runs, 1 in
+  2000 in the measured one). `connect(..., direct=False)` keeps a client on the gateway.
+- `connect(..., hot=True)` (any endpoint) asks the worker not to let its thread or GPU idle for about a second after
+  each request: 2.3 ms less model time per request at a remote client's pace on an RTX 4090. The worker's CPU
+  core and GPU stay busy meanwhile (the GPU draws power as if it were working), so it is off by default.
 
 ### Ownership
 
@@ -182,7 +212,7 @@ and offers `--adopt [ID]` (take it over) or `--new` (create your own).
 ## Limits and known issues
 
 - Only `pi05_libero` has run on a GPU. All other models and custom checkpoints are untested.
-- The fast path runs only for `pi05_libero` on an RTX 4090. On the A40 and for every other model the worker runs
+- The fast path runs only for `pi05_libero` on an RTX 4090 or an H200. On the A40 and for every other model the worker runs
   stock openpi: 75 to 79 ms per inference on the RTX 4090 and about 146 ms on the A40, against 31 to 34 ms on the
   fast path.
 - A first start depends on the GPU host's download speed (12.4 GB checkpoint plus about 3.5 GB of packages).

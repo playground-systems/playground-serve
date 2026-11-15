@@ -18,6 +18,7 @@ GPU = "NVIDIA GeForce RTX 4090"
     ("off", "pi05_libero", GPU, True, "stock"),  # pgs up --stock-path
     ("auto", "pi05_droid", GPU, True, "stock"),  # no fast path for other models
     ("auto", "custom-pi05_libero-1a2b3c4d", GPU, True, "stock"),  # own checkpoint: the stored actions do not apply
+    ("auto", "pi05_libero", "NVIDIA H200", True, "fast"),  # pgs up --gpu H200
     ("auto", "pi05_libero", "NVIDIA A40", True, "stock"),  # the second pool's card: not measured
     ("auto", "pi05_libero", "NVIDIA GeForce RTX 5090", True, "stock"),  # needs torch cu128: left out
     ("auto", "pi05_libero", "", True, "stock"),  # nvidia-smi said nothing
@@ -30,8 +31,8 @@ def test_path_decision(mode, model, gpu, ref, want):
         assert "--stock-path" in reason
 
 
-def test_only_pi05_libero_on_the_rtx_4090_and_it_has_a_reference():
-    assert fastpath.FAST == {"pi05_libero": (GPU,)}
+def test_only_pi05_libero_on_the_measured_gpus_and_it_has_a_reference():
+    assert fastpath.FAST == {"pi05_libero": (GPU, "NVIDIA H200")}
     assert fastpath.reference("pi05_libero").is_file()
 
 
