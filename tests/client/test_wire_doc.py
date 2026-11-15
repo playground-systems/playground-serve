@@ -31,6 +31,8 @@ CODE = {
     "JPEG_KEY": codec.JPEG_KEY.decode(),
     "SPLIT_KEY": client.SPLIT_KEY,
     "SPLIT_PATH": client.SPLIT_PATH,
+    "DIRECT_OPEN_TIMEOUT_S": client.DIRECT_OPEN_TIMEOUT,
+    "HOT_QUERY": client.HOT_QUERY,
     "HEALTH_URL": resolve.HEALTH_URL,
     "COLD_WAIT_S": list(resolve.COLD_WAIT_S),
     "WARM_WAIT_S": list(resolve.WARM_WAIT_S),

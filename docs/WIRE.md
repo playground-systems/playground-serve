@@ -4,13 +4,11 @@ For a second client (another language, or a copy that cannot import `playground_
 
 ## Connect
 
-- URL: `wss://<endpoint-id>.api.runpod.ai/ws`, as `pgs up` and `pgs status` print it (`ws://host:port` for a local
-  server). The path reaches the server unchanged. The Python client also reads it from `URL_ENV`.
+- URL: `wss://<endpoint-id>.api.runpod.ai/ws`, as `pgs up` and `pgs status` print it (`ws://host:port` for a local server). The path reaches the server unchanged. The Python client also reads it from `URL_ENV`.
 - Upgrade request header: `Authorization: Bearer <Runpod API key>`. Runpod's gateway checks it and removes it; the
   worker never sees it. A key that may call this endpoint is enough; it needs no right to read the account.
 - No permessage-deflate, no frame size limit (a raw LIBERO observation is about 400 kB), TCP_NODELAY on.
-- Answer the server's ping frames (every 20 s; libraries do). Pings do not keep a worker (measured through Runpod's
-  gateway) and client pings are optional; the no-op below is the liveness check.
+- Answer the server's ping frames (every 20 s; libraries do). Pings do not keep a worker (measured through Runpod's gateway) and client pings are optional; the no-op below is the liveness check.
 
 ## Opening the socket: cold start and retries
 
@@ -40,6 +38,9 @@ Every frame is binary msgpack-numpy, except a server error: a text frame with th
    previous request's total server time); other keys the policy adds (openpi's `policy_timing`).
 4. Repeat 2 and 3. One request in flight per socket: send the next request, no-op included, only after the reply to the previous one. For parallel requests open more sockets (scaling requestCount 4, as `pgs up` sets it, admitted three sockets at once on one worker).
 5. Split requests, only when the features say `"split": true` and the mode is `jpeg`: open a second socket to the same URL with the query `rs_aux=<session id>` (`SPLIT_PATH`; any random string per connection; the server sends nothing on it, not even metadata). Send every second image map, largest first, as one frame on it and the rest of the observation as the request frame, both with the extra key `SPLIT_KEY`: [session id, request number]. The server merges the two maps (it waits up to 5 s for the second frame, then answers with an error). Each frame of a LIBERO request is then under 11 kB and fits the first flight of a TCP connection that was idle; a 19.7 kB frame sent 0.2 s or more after the previous one took one more round trip of the path through Runpod's gateway (about 70 ms to US-CA-2). If the second socket fails, send whole requests on the first.
+
+6. Direct port, only when the features hold a map `"direct"` (an endpoint made with `pgs up --direct`): `{"host", "port", "cert", "token"}` is a port of the worker's own public address. Keep the gateway socket open (it keeps the worker running; send the keep-alive on it as before) and open a second connection `wss://<host>:<port>/<path>` for the requests: TLS that trusts exactly the PEM certificate in `cert` and checks no host name (the worker made it at boot; it reached you through the gateway, which checked your key), upgrade header `Authorization: Bearer <token>`, at most `DIRECT_OPEN_TIMEOUT_S` seconds. The server sends its metadata on it too (ignore it), then messages go as in 2 to 5 (the second socket of split requests also goes to the direct port, with the same TLS and header). Use the gateway URL's path and query on it. If it cannot be opened or is lost, send requests on the gateway socket; read `direct` again after every reconnect (a new worker has a new address, certificate and token). Never log the token.
+7. Hot, optional, when the features say `"hot": true`: put the query `HOT_QUERY` in the URL of every socket. For about a second after each request on such a socket the worker does not let its thread or GPU idle, which took 2.3 to 2.7 ms off the model time at a remote client's pace (RTX 4090). Off by default: the worker's CPU core and GPU stay busy meanwhile.
 
 msgpack-numpy, as openpi's `msgpack_numpy.py`: Python str is msgpack str, bytes is bin. A numpy array is the map
 `{b"__ndarray__": True, b"data": <bin: the bytes in C order>, b"dtype": <str: numpy dtype.str such as "<f4" or "|u1">,
@@ -71,11 +72,8 @@ one (`jpeg` only if advertised), else `jpeg` if advertised, else `resize`. Targe
 
 Only when the features say `"noop": true` (a stock server would run the policy on it and fail):
 
-- After `KEEPALIVE_S` seconds with nothing sent on the socket, send `NOOP` (str key). The worker answers exactly
-  `{"rs_noop": true}` and runs no inference. It is the one request in flight until its reply arrives.
-- No reply within `NOOP_TIMEOUT_S` seconds, or any other reply: the worker is gone. Close the socket and connect again
-  at once (a cold start). A socket whose worker was lost stays open, often for minutes and with no close frame, and
-  messages on it get no reply, ever (measured through Runpod's gateway).
+- After `KEEPALIVE_S` seconds with no request sent (on either connection, with a direct port), send `NOOP` (str key) on the gateway socket; with a direct connection open, send it there too and read both replies. The worker answers exactly `{"rs_noop": true}` and runs no inference. It is the one request in flight until its reply arrives.
+- No reply within `NOOP_TIMEOUT_S` seconds, or any other reply: the worker is gone. Close the socket and connect again at once (a cold start). A socket whose worker was lost stays open, often for minutes and with no close frame, and messages on it get no reply, ever (measured through Runpod's gateway).
 
 ## Close codes and failures seen through the gateway
 
@@ -112,6 +110,8 @@ and starts no worker. `running` >= 1 is warm (counted from container start, so i
 | `JPEG_KEY` | `__jpeg__` | `codec.JPEG_KEY` |
 | `SPLIT_KEY` | `rs_split` | `client.SPLIT_KEY` |
 | `SPLIT_PATH` | `rs_aux` | `client.SPLIT_PATH` |
+| `DIRECT_OPEN_TIMEOUT_S` | `5` | `client.DIRECT_OPEN_TIMEOUT` |
+| `HOT_QUERY` | `rs_hot=1` | `client.HOT_QUERY` |
 | `HEALTH_URL` | `https://api.runpod.ai/v2/{}/health` | `resolve.HEALTH_URL` |
 | `COLD_WAIT_S` | `40, 120` | `resolve.COLD_WAIT_S` |
 | `WARM_WAIT_S` | `0, 1` | `resolve.WARM_WAIT_S` |

@@ -12,6 +12,9 @@ and the socket closes with code 1011. GET /healthz answers 200. Compression is o
 array or a string, sleeps --infer-ms, and returns zero actions of shape (10, 7) (pi05_libero's action horizon, LIBERO's
 action size). The sleep does not block the event loop; openpi's server blocks it for the length of inference.
 
+Config(direct=True) adds a worker's direct port (worker/direct.py): a second listener with TLS and a token, advertised
+in the metadata.
+
 Playground Serve features: the metadata carries {"playground_serve": {"jpeg": True, "noop": True}} (--stock leaves it out), and the
 observation {"rs_noop": True} is answered with {"rs_noop": True} without inference (with --stock it reaches inference
 and fails, as on a stock server).
@@ -72,6 +75,10 @@ class Config:
     upgrades: list = field(default_factory=list)
     noop_reply: bool = True  # False: no-ops get no reply, as on a worker that is gone
     split: bool = False  # advertise and join split requests (a second socket at ?rs_aux=<session>)
+    direct: bool = False  # a second listener as a worker's direct port: TLS with its own certificate, and a token
+    direct_info: dict = field(default_factory=dict, init=False)  # what the metadata advertises once it listens
+    direct_requests: int = field(default=0, init=False)  # inferences that arrived on the direct listener
+    paths: list = field(default_factory=list, init=False)  # the request path of every socket opened, in order
     parts: dict = field(default_factory=dict, init=False)  # (session, request number) -> future of the second frame
     aux_frames: int = field(default=0, init=False)
     requests: int = field(default=0, init=False)
@@ -90,7 +97,8 @@ class Config:
                 "downlink_mbps": self.downlink_mbps, "rtt_ms": self.rtt_ms, "net_p50_ms": self.net_p50_ms,
                 "net_p95_ms": self.net_p95_ms, "spike_prob": self.spike_prob, "spike_ms": list(self.spike_ms)}
         if not self.stock:
-            meta[self.feature_key] = {"jpeg": True, "noop": True, **({"split": True} if self.split else {})}
+            meta[self.feature_key] = {"jpeg": True, "noop": True, **({"split": True} if self.split else {}),
+                                      **({"direct": self.direct_info} if self.direct_info else {})}
         return meta
 
     def net_delay(self) -> float:
@@ -115,7 +123,8 @@ def _part(cfg: Config, tag) -> asyncio.Future:
     return cfg.parts.setdefault(tuple(tag), asyncio.get_running_loop().create_future())
 
 
-async def _handler(ws: ServerConnection, cfg: Config) -> None:
+async def _handler(ws: ServerConnection, cfg: Config, direct: bool = False) -> None:
+    cfg.paths.append(ws.request.path)
     if cfg.split and "rs_aux=" in ws.request.path:  # the second socket: frames are kept for the first, no replies
         with contextlib.suppress(ConnectionClosed):
             async for msg in ws:
@@ -142,6 +151,7 @@ async def _handler(ws: ServerConnection, cfg: Config) -> None:
                 obs.update(await asyncio.wait_for(_part(cfg, tag), 5))
                 del cfg.parts[tuple(tag)]
             cfg.requests += 1
+            cfg.direct_requests += direct
             if cfg.drop_every and cfg.requests % cfg.drop_every == 0:
                 ws.transport.abort()  # a dropped connection: no close frame, no reply
                 return
@@ -244,10 +254,28 @@ async def start(cfg: Config, host: str = "127.0.0.1", port: int = 0) -> tuple[li
     server = await serve(lambda ws: _handler(ws, cfg), host, 0 if cfg.shaped else port, compression=None,
                          max_size=None, process_request=_process_request(cfg))
     ws_port = server.sockets[0].getsockname()[1]
+    servers = [server]
+    if cfg.direct:  # as worker/serve.py: the same handler on a second port, behind worker/direct.py's TLS and token
+        import secrets
+
+        from ..worker import direct
+
+        pem, context = direct.certificate()
+        token = secrets.token_urlsafe(16)
+
+        def check(connection, request):
+            if not direct.allowed(request.headers.get("Authorization"), token):
+                return connection.respond(http.HTTPStatus.UNAUTHORIZED, "Unauthorized\n")
+            return None
+
+        second = await serve(lambda ws: _handler(ws, cfg, True), host, 0, compression=None, max_size=None, ssl=context,
+                             process_request=check)
+        cfg.direct_info.update(host=host, port=second.sockets[0].getsockname()[1], cert=pem, token=token)
+        servers.append(second)
     if not cfg.shaped:
-        return [server], ws_port
+        return servers, ws_port
     proxy = await asyncio.start_server(lambda r, w: _proxy(cfg, ws_port, r, w), host, port)
-    return [server, proxy], proxy.sockets[0].getsockname()[1]
+    return [*servers, proxy], proxy.sockets[0].getsockname()[1]
 
 
 class MockServer:

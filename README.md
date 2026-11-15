@@ -114,6 +114,8 @@ Options of `pgs up`:
 - `--region DC` picks the data center of a new endpoint, for example `US-NC-1`.
 - `--gpu GPU` uses another GPU than the model's default pools, by name or Runpod pool, for example `H200`.
 - `--stock-path` serves openpi's own policy instead of the fast path.
+- `--direct` also serves on a TCP port of the worker's own public address; the Python client then sends its requests
+  there instead of through Runpod's gateway (see [Direct port](#direct-port)).
 - `--adopt [ID]` and `--new`: see [Ownership](#ownership).
 
 ## Costs and when it bills
@@ -173,6 +175,26 @@ On `pi05_libero` with an RTX 4090 (or an H200, `--gpu H200`) the worker serves t
 with the same bf16 weights, the same 10 flow steps and openpi's own transforms. At every start it must reproduce stock
 openpi's stored actions for a real frame, or it serves openpi's own policy instead. `policy.metadata["playground_serve"]`
 says which path serves (`path`) and why (`path_reason`). Everywhere else the worker serves openpi's own policy.
+
+### Direct port
+
+`pgs up MODEL --direct` (an endpoint made with it keeps it) also lists a TCP port on the endpoint. Runpod gives a
+serverless worker a public address and maps that port to it; the worker serves the same protocol there behind TLS,
+with a certificate and a token it makes at every boot and sends in its metadata. The Python client reads them through
+the gateway socket (which checked your API key), opens a second connection straight to the worker and sends its
+requests there. The gateway socket stays open: it starts and keeps the worker, carries the keep-alive, and takes the
+requests again if the direct connection cannot be opened or is lost. Nothing changes in billing, scale to zero or
+start time.
+
+- Measured from the US east coast to an RTX 4090 in US-CA-2 (California): round trip p50 113.2 ms direct against
+  123.2 ms through the gateway, p95 120.3 against 133.3 (same worker, alternating blocks; docs/BENCHMARKS.md).
+- What you give up: the direct connection does not pass Cloudflare or Runpod's load balancer. It needs outbound TCP
+  to a high port of a plain IP address (some company networks block that; the client then stays on the gateway), its
+  TLS certificate is the worker's own (pinned by the client, not signed by a public authority), and the port is open
+  to the internet behind the token. `connect(..., direct=False)` keeps a client on the gateway.
+- `connect(..., hot=True)` (any endpoint) asks the worker not to let its thread or GPU idle for about a second after
+  each request: 2.3 to 2.7 ms less model time per request at a remote client's pace on an RTX 4090. The worker's CPU
+  core and GPU stay busy meanwhile (the GPU draws power as if it were working), so it is off by default.
 
 ### Ownership
 

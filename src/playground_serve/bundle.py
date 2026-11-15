@@ -22,7 +22,8 @@ from importlib import resources
 from playground_serve.models import ModelSpec
 
 WORKER_FILES = ("boot.sh", "build_env.sh", "health.py", "serve.py", "server_decode.py", "stage.py", "warmup.py",
-                "fastpath.py", "fast_policy.py", "selftest.py", "selftest_pi05_libero.json", "rtvla_opt/pi05_infer.py")
+                "fastpath.py", "fast_policy.py", "selftest.py", "selftest_pi05_libero.json", "rtvla_opt/pi05_infer.py",
+                "direct.py")
 VOLUME = "/runpod-volume"
 PORT = 8000  # openpi websocket server; the load balancer routes client traffic here
 PORT_HEALTH = 8001  # health.py: GET /ping is 204 while starting, 200 when ready

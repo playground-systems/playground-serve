@@ -71,6 +71,9 @@ def parser() -> argparse.ArgumentParser:
                    "Runpod pool, e.g. H200 or HOPPER_141 (`pgs up` prints its price before it creates anything)")
     s.add_argument("--stock-path", action="store_true", help="serve openpi's own policy instead of the fast path "
                    "(realtime-vla graph, the default for pi05_libero on an RTX 4090; same weights, checked at boot)")
+    s.add_argument("--direct", action="store_true", help="also serve on a TCP port of the worker's own public address, "
+                   "so requests skip Runpod's gateway (about 14 ms less per request from the US east coast to "
+                   "US-CA-2); TLS with the worker's own certificate, no Cloudflare in front; still serverless")
     g = s.add_mutually_exclusive_group()
     g.add_argument("--adopt", nargs="?", const=True, metavar="ID", help="take over this model's endpoint that another "
                    "owner (or a `pgs` from before owner ids) created")
@@ -132,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
             except KeyError as e:
                 raise LauncherError(str(e).strip("'\"")) from None
             launcher.up(args.model, warm=args.warm, idle_min=args.idle, adopt=args.adopt, new=args.new,
-                        stock_path=args.stock_path, dc=args.region, gpu=gpu)
+                        stock_path=args.stock_path, dc=args.region, gpu=gpu, direct=args.direct)
         elif args.command == "down":
             launcher.down(args.model)
         elif args.command == "status":

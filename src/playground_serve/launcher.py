@@ -19,6 +19,10 @@ Facts this module is built on (measured on Runpod; numbers in docs/BENCHMARKS.md
   the probe runs while its worker boots (it took about a minute before the create when it ran first);
 - the fast model path (worker/fastpath.py) is the worker's default where it was measured; `--stock-path` sets
   RS_FAST=off, so openpi's own policy serves;
+- a serverless worker gets a public address and a mapped port for every TCP port its endpoint lists (measured in
+  US-CA-2: RUNPOD_PUBLIC_IP, RUNPOD_TCP_PORT_<port>), and a request on that port skips the gateway: 77 ms against
+  91 ms for 19.7 kB from the US east coast. `--direct` lists DIRECT_PORT and sets DIRECT_KEY; the gateway socket
+  still starts and keeps the worker;
 - every env map carries RS_RELEASE_ID, a digest of the rest of it, and the openpi worker sends it in its metadata;
   `up` reports ready only once the worker the gateway connects to sends the id it just set. After a release change
   Runpod kept or started a worker of the old release (a client held it, or a new connection revived it), so such a
@@ -56,6 +60,9 @@ LEVEL_NAME = {v: k for k, v in LEVEL.items()}
 VOLUME_USD_PER_GB_MONTH = {"STANDARD": 0.07, "HIGH_PERFORMANCE": 0.14}
 HOURS_PER_MONTH = 730
 PORTS = ["8000/http", "8001/http"]  # websocket on PORT 8000, health on PORT_HEALTH 8001
+# `pgs up --direct`: the worker also listens on this container port (TCP, mapped by Runpod to a port of the worker's
+# public address; worker/direct.py), and RS_DIRECT tells it so. A client then sends its requests there.
+DIRECT_PORT, DIRECT_KEY = 8002, "RS_DIRECT"
 DISK_GB = 50
 # Default: no worker kept. A worker that a request or a client started stays IDLE_MIN after the last one ends (long
 # enough for a first start's volume fill, 84 to 139 s after ready), then stops and billing stops.
@@ -376,7 +383,8 @@ class Launcher:
 
     def _container(self, spec, env: dict) -> dict:
         entrypoint, cmd = self._start()
-        return {"image": spec.image, "entrypoint": entrypoint, "cmd": cmd, "ports": PORTS, "disk": DISK_GB, "env": env}
+        ports = PORTS + ([f"{env[DIRECT_KEY]}/tcp"] if env.get(DIRECT_KEY) else [])
+        return {"image": spec.image, "entrypoint": entrypoint, "cmd": cmd, "ports": ports, "disk": DISK_GB, "env": env}
 
     def _permission(self, e: ApiError) -> LauncherError:
         return LauncherError(f"Runpod refused this API key: {e}. {advice(e)}")
@@ -499,10 +507,11 @@ class Launcher:
 
     # ----- up
     def up(self, model: str, *, warm: bool = False, idle_min: int = IDLE_MIN, adopt=None, new: bool = False,
-           stock_path: bool = False, dc: str | None = None, gpu: str | None = None) -> dict:
+           stock_path: bool = False, dc: str | None = None, gpu: str | None = None, direct: bool = False) -> dict:
         """`adopt`: True or an id, to take over another owner's resource of this model; `new`: create your own anyway;
         `stock_path`: serve openpi's own policy, not the fast path; `dc`: the data center of a new endpoint and volume
-        (default: the nearest with stock, measured); `gpu`: a Runpod pool to use instead of the model's own pools."""
+        (default: the nearest with stock, measured); `gpu`: a Runpod pool to use instead of the model's own pools;
+        `direct`: the worker also serves on a port of its own public address (an endpoint made with it keeps it)."""
         spec = self._spec(model)
         if gpu:
             spec = dataclasses.replace(spec, gpu_pools=[gpu])
@@ -511,14 +520,16 @@ class Launcher:
         env = self._env(spec)
         if stock_path and "RS_FAST" in env:
             env = {**env, "RS_FAST": "off"}
-        env = {**env, RELEASE_KEY: release_id(env)}
-        release = env[RELEASE_KEY]  # the worker (worker/serve.py) sends it in its metadata
         with concurrent.futures.ThreadPoolExecutor(4) as ex:  # four independent reads, about 1.7 s one after another
             reads = [ex.submit(f) for f in (self.api.list_endpoints, self.api.list_volumes,
                                             lambda: self.api.serverless_gpus(cuda_floor(spec.image)),
                                             self.api.datacenters)]
             endpoints, volumes, gpus, dcs = (r.result() for r in reads)
         ep, vol, (their_eps, their_vols) = self.reconcile(model, endpoints, volumes)
+        if direct or ((ep or {}).get("env") or {}).get(DIRECT_KEY):  # an endpoint made with --direct keeps it
+            env = {**env, DIRECT_KEY: str(DIRECT_PORT)}
+        env = {**env, RELEASE_KEY: release_id(env)}
+        release = env[RELEASE_KEY]  # the worker (worker/serve.py) sends it in its metadata
         kept = ((ep or {}).get("gpu") or {}).get("pools") or []
         if not gpu and kept and kept[0] not in spec.gpu_pools:  # an endpoint made with --gpu keeps its pool
             spec = dataclasses.replace(spec, gpu_pools=[kept[0], *spec.gpu_pools])
@@ -571,6 +582,10 @@ class Launcher:
         if first:
             self.out(FILL_NOTE)
         self.out(f"Websocket: {url}")
+        if env.get(DIRECT_KEY):
+            self.out("Direct port: on. Clients send requests straight to the worker's public address (TLS with the "
+                     "worker's own certificate, a token per boot) and keep the gateway socket for start, keep-alive "
+                     "and fallback; connect(..., direct=False) uses the gateway only.")
         self.out(billing(model, want, price))
         self.out(f"Volume: about {volume_month_usd(vol):.2f} USD/month until `pgs delete {model} --volume`.")
         from . import state

@@ -9,7 +9,9 @@ Playground Serve extensions, used only when the metadata carries {"playground_se
 "robo_serve", kept for compatibility with workers deployed before the rename): "jpeg": true means the server decodes
 jpeg-mode images (server_decode.py); "noop": true means it answers the observation {"rs_noop": true} with
 {"rs_noop": true} without running the policy, which the client sends as a keep-alive; "split": true means it joins a
-request sent in two frames on two sockets (docs/WIRE.md, "Split requests").
+request sent in two frames on two sockets (docs/WIRE.md, "Split requests"); "direct": {"host", "port", "cert",
+"token"} is the worker's own public port (`pgs up --direct`; docs/WIRE.md, "Direct port"); "hot": true means a socket
+whose URL holds the query `rs_hot=1` keeps the server hot between its requests (docs/WIRE.md, "Hot").
 
 Image settings from the metadata (any server may send them):
 "image_size", [H, W] or an int, is the size the resize and jpeg modes send; "image_mode", one of MODES, is the default
@@ -22,8 +24,11 @@ import inspect
 import logging
 import secrets
 import socket
+import ssl
 import threading
 import time
+
+from urllib.parse import urlsplit
 
 import numpy as np
 from PIL import Image
@@ -48,6 +53,8 @@ FEATURE_KEYS = ("playground_serve", "robo_serve")
 BACKOFF_S = (0.5, 10.0)
 SPLIT_KEY = "rs_split"  # in both frames of a split request: [session id, request number]
 SPLIT_PATH = "rs_aux"  # query key of the second socket's URL; its value is the session id
+HOT_QUERY = "rs_hot=1"  # in a socket's URL: the server stays hot between this socket's requests
+DIRECT_OPEN_TIMEOUT = 5.0  # the direct port answers at once or not at all (a firewall): never hold a connect for it
 IMAGE_SIZE = 224  # resize and jpeg modes: images go as IMAGE_SIZE x IMAGE_SIZE unless `size` or the metadata says
 # Client ping frames, without a ping timeout (the no-op is the liveness check). websockets 13.1, the last release for
 # Python 3.8, has no pings in its threading client; the server's pings are answered either way.
@@ -81,6 +88,18 @@ class Policy:
     the path (about 70 ms to US-CA-2); two frames of up to 11.5 kB on two sockets did not. The same bytes, the same
     inference; False keeps one socket. If the second socket cannot be opened or fails, requests go whole on the first.
 
+    direct: when the server advertises a direct port (an endpoint made with `pgs up --direct`), requests and replies
+    go over a second connection straight to the worker's public address (TLS with the worker's own certificate, which
+    the metadata carries, and its token) instead of through Runpod's gateway: about 14 ms less per request from the US
+    east coast to US-CA-2. The gateway socket stays open: it keeps the worker running, carries the keep-alive, and
+    takes the requests again if the direct connection cannot be opened or is lost. False never opens it. `timing`
+    says which path a request took ("path": "direct" or "gateway").
+
+    hot: True asks the worker to stay hot between this client's requests (its thread polls instead of sleeping and, on
+    the fast path, the GPU does not idle; for about a second after each request): 2.3 to 2.7 ms less model time per
+    request on an RTX 4090 at the pace of a remote client. The worker's CPU core and GPU are busy meanwhile, so it is
+    off by default; the model's computation is the same.
+
     open_timeout caps each upgrade attempt (and the wait for the metadata frame). Runpod's gateway holds an upgrade while
     the worker starts but does not reliably hand it over when the worker turns ready (502 or 400 well after ready), so
     short attempts, retried at once when they time out, open the socket within seconds of ready.
@@ -88,16 +107,21 @@ class Policy:
 
     def __init__(self, url: str, api_key: str | None = None, *, mode: str | None = None, size=None,
                  jpeg_quality: int = 90, open_timeout: float = 10.0, wait: float = 600.0, retries: int = 2,
-                 recv_timeout: float | None = 300.0, keepalive: float | None = 20.0, split: bool = True) -> None:
+                 recv_timeout: float | None = 300.0, keepalive: float | None = 20.0, split: bool = True,
+                 direct: bool = True, hot: bool = False) -> None:
         if mode is not None and mode not in MODES:
             raise ValueError(f"mode must be one of {MODES} or None, not {mode!r}")
         self.url = url if url.startswith(("ws://", "wss://")) else f"ws://{url}"
+        if hot and HOT_QUERY not in self.url:
+            self.url += ("&" if "?" in self.url else "?") + HOT_QUERY
         self._mode, self._size = mode, size
         self.mode = mode or "resize"
         self.size, self.jpeg_quality = _height_width(size), jpeg_quality
         self.open_timeout, self.wait, self.retries, self.recv_timeout = open_timeout, wait, retries, recv_timeout
-        self.keepalive, self.split = keepalive, split
+        self.keepalive, self.split, self.direct = keepalive, split, direct
         self._aux: ClientConnection | None = None  # the second socket of split requests
+        self._direct: ClientConnection | None = None  # the worker's direct port; requests use it while it is open
+        self._path: dict = {}  # how to open a socket on the path that carries requests (for the second socket)
         self._sid, self._seq = "", 0
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
         self._ws: ClientConnection | None = None
@@ -166,6 +190,9 @@ class Policy:
                 self.size = _height_width(meta.get("image_size"))
             if self.mode == "jpeg":
                 Image.preinit()  # load Pillow's JPEG plugin now (~30-50 ms) instead of in the first request
+            self._path = {}
+            if self.direct and isinstance(self.features.get("direct"), dict):
+                self._open_direct(self.features["direct"])
             if self.split and self.mode == "jpeg" and self.features.get("split") is True:
                 self._open_aux()
             self._last_send = time.monotonic()
@@ -176,30 +203,50 @@ class Policy:
                                                           name="playground-serve-keepalive", daemon=True)
                 self._keepalive_thread.start()
 
-    def _open_aux(self) -> None:
-        """The second socket, to the same URL with ?rs_aux=<a new session id>. The server sends nothing on it."""
-        self._sid, self._seq = secrets.token_hex(8), 0
-        url = f"{self.url}{'&' if '?' in self.url else '?'}{SPLIT_PATH}={self._sid}"
+    def _open_direct(self, info: dict) -> None:
+        """The worker's direct port: TLS that trusts exactly the certificate the metadata carries (it came through the
+        gateway, which checked the API key), the token in the upgrade header. Any failure leaves the gateway path."""
         try:
-            self._aux = self._open(url)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            context.check_hostname = False  # the certificate itself is pinned; it names no host
+            context.load_verify_locations(cadata=info["cert"])
+            at = urlsplit(self.url)  # the same path and query as the gateway URL
+            path = {"url": f"wss://{info['host']}:{int(info['port'])}{at.path or '/ws'}{'?' + at.query if at.query else ''}",
+                    "ssl": context,
+                    "additional_headers": {"Authorization": f"Bearer {info['token']}"},
+                    "open_timeout": min(self.open_timeout, DIRECT_OPEN_TIMEOUT)}
+            self._direct = self._open(**path)
+            self._path = path
+        except (OSError, InvalidHandshake, ConnectionClosed, KeyError, TypeError, ValueError) as e:
+            log.warning("no direct connection to the worker of %s (%r); requests go through the gateway", self.url, e)
+
+    def _open_aux(self) -> None:
+        """The second socket, on the path that carries requests, with ?rs_aux=<a new session id>. The server sends
+        nothing on it."""
+        self._sid, self._seq = secrets.token_hex(8), 0
+        url = self._path.get("url", self.url)
+        try:
+            self._aux = self._open(**{**self._path, "url": f"{url}{'&' if '?' in url else '?'}{SPLIT_PATH}={self._sid}"},
+                                   aux=True)
         except (OSError, InvalidHandshake, ConnectionClosed) as e:
             log.warning("no second socket to %s (%r); requests go whole on one socket", self.url, e)
 
-    def _open(self, url: str | None = None) -> ClientConnection:
+    def _open(self, url: str | None = None, aux: bool = False, **options) -> ClientConnection:
         # __enter__ returns the open connection in every websockets version: connect() returns the connection up to 17
         # (17.1 warns unless it is entered) and a context manager after; close() below ends it either way.
-        ws = ws_connect(url or self.url, additional_headers=self._headers, compression=None, max_size=None,
-                        open_timeout=self.open_timeout, user_agent_header=f"playground-serve/{__version__}",
-                        **PINGS).__enter__()
+        options = {"additional_headers": self._headers, "open_timeout": self.open_timeout, **options}
+        ws = ws_connect(url or self.url, compression=None, max_size=None,
+                        user_agent_header=f"playground-serve/{__version__}", **PINGS, **options).__enter__()
         try:
             # websockets 17 sets this too; set it here so it holds in older versions.
             ws.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            if url:
+            if aux:
                 return ws
-            first = ws.recv(timeout=self.open_timeout)
+            first = ws.recv(timeout=options["open_timeout"])
             if isinstance(first, str):
-                raise ConnectionError(f"{self.url} sent text instead of openpi's metadata frame: {first[:300]}")
-            self.metadata = unpackb(first)
+                raise ConnectionError(f"{url or self.url} sent text instead of openpi's metadata frame: {first[:300]}")
+            if url is None:
+                self.metadata = unpackb(first)
         except BaseException:
             ws.close()
             raise
@@ -235,6 +282,7 @@ class Policy:
                 if made != (self.connects, self._aux):  # a reconnect: other features, another second socket
                     made = self.connects, self._aux
                     data, part = self._frames(obs)
+                ws = self._direct or self._ws
                 try:
                     t2 = time.perf_counter()
                     self._last_send = time.monotonic()
@@ -246,14 +294,19 @@ class Policy:
                             self._close_aux()
                             made = self.connects, None
                             data, part = self._frames(obs)
-                    self._ws.send(data)
-                    reply = self._ws.recv(timeout=self.recv_timeout)
+                    ws.send(data)
+                    reply = ws.recv(timeout=self.recv_timeout)
                     t3 = time.perf_counter()
                     break
                 except TimeoutError:  # the server is slow, not gone: do not send the request twice
                     self._close_ws()
                     raise
                 except (ConnectionClosed, OSError) as e:
+                    if ws is self._direct and attempt < self.retries:  # the gateway socket is still open: use it
+                        log.warning("direct connection to the worker of %s lost (%r); requests go through the gateway",
+                                    self.url, e)
+                        self._close_direct()
+                        continue
                     self._close_ws()
                     if attempt == self.retries:
                         raise ConnectionError(f"lost the connection to {self.url} {attempt + 1} times") from e
@@ -270,6 +323,7 @@ class Policy:
             "rtt_ms": (t3 - t2) * 1e3,
             "infer_ms": server.get("infer_ms") if isinstance(server, dict) else None,
             "unpack_ms": (t4 - t3) * 1e3,
+            "path": "direct" if ws is self._direct else "gateway",
         }
         return result
 
@@ -303,8 +357,19 @@ class Policy:
                     self._aux.send(NOOP)  # keeps the second socket in use; the server does not answer it
                 except (ConnectionClosed, OSError):
                     self._close_aux()
+            direct = self._direct
+            if direct is not None:  # keeps the direct connection in use; its reply is read after the gateway's
+                try:
+                    direct.send(NOOP)
+                except (ConnectionClosed, OSError):
+                    direct = self._close_direct()
             ws.send(NOOP)
             reply = ws.recv(timeout=NOOP_TIMEOUT)
+            if direct is not None:
+                try:
+                    direct.recv(timeout=NOOP_TIMEOUT)
+                except (ConnectionClosed, OSError, TimeoutError):
+                    self._close_direct()
             ok = not isinstance(reply, str) and isinstance(msg := unpackb(reply), dict) and msg.get("rs_noop") is True
         except (ConnectionClosed, OSError, TimeoutError) as e:
             if not self._stop.is_set():  # not closed by close()
@@ -339,9 +404,16 @@ class Policy:
         if aux is not None:
             aux.close()
 
+    def _close_direct(self) -> None:
+        """Requests go through the gateway socket from here on (whole, on one socket) until the next connect."""
+        ws, self._direct, self._path = self._direct, None, {}
+        self._close_aux()
+        if ws is not None:
+            ws.close()
+
     def _close_ws(self) -> None:
         ws, self._ws = self._ws, None
-        self._close_aux()
+        self._close_direct()
         if ws is not None:
             ws.close()
 
