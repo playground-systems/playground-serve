@@ -1,6 +1,6 @@
 """The direct port (`pgs up MODEL --direct`): the worker's server also listens on a TCP port that Runpod maps to the
-worker's public address, so a client's requests skip Runpod's gateway. From the US east coast to US-CA-2 a 19.7 kB
-request and its reply took 77 ms on that path against 91 ms through the gateway (docs/BENCHMARKS.md).
+worker's public address, so a client's requests skip Runpod's gateway. From the US east coast to US-CA-2 that took
+about 11 ms off each request (docs/BENCHMARKS.md).
 
 Standard library and the openssl command only. `setup()` runs once per boot: it reads the address Runpod gave the port
 (RUNPOD_PUBLIC_IP, RUNPOD_TCP_PORT_<port>), makes a new self-signed certificate and a random token, and returns what

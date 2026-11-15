@@ -1,6 +1,6 @@
 # Measured numbers
 
-All numbers are for `pi05_libero`, measured on Runpod Serverless on 2026-11-13 and 2026-11-14 with the code in this
+All numbers are for `pi05_libero`, measured on Runpod Serverless from 2026-11-13 to 2026-11-15 with the code in this
 repository or its direct predecessors. They are small samples from one client location. Your numbers will differ with
 the GPU host, the data center, and your network. Lines marked "estimate" were not measured.
 
@@ -95,8 +95,9 @@ Model time = observation in to actions out on the GPU worker, without the networ
 | L40S | 72.5 | 33.2 | Runpod pod, in-process only |
 | H100 80GB | 52.1 | 20.6 | Runpod pod, in-process only |
 
-- `pgs` uses the RTX 4090 pool first and the A40 pool second. The fast path runs only on the RTX 4090. The RTX 5090,
-  L40S and H100 rows are not reachable through `pgs` today; they are listed for comparison.
+- `pgs` uses the RTX 4090 pool first and the A40 pool second. `pgs up --gpu` picks another pool (L40S, A100, H100 or
+  H200); there the worker serves stock openpi, except on the H200, which also has the fast path. No H200 numbers are
+  listed here yet. The RTX 5090 is not reachable through `pgs`; its row and the in-process rows are for comparison.
 - Runpod list prices read 2026-11-13, per hour while a worker runs: RTX 4090 1.34 USD, A40 1.22 USD.
 
 ## Same policy on the fast path

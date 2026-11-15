@@ -112,7 +112,9 @@ Options of `pgs up`:
 - `--warm` keeps one worker running (and billing) until `pgs down`.
 - `--idle MIN` sets how long a worker stays after its last request or client (default 5 minutes).
 - `--region DC` picks the data center of a new endpoint, for example `US-NC-1`.
-- `--gpu GPU` uses another GPU than the model's default pools, by name or Runpod pool, for example `H200`.
+- `--gpu GPU` uses another GPU than the model's default pools, by name or Runpod pool, for example `H200`. It bills
+  that GPU's price (H200 6.99 USD/hr against 1.34 for the RTX 4090, list prices read 2026-11-13), only the RTX 4090
+  and the H200 get the fast path (other GPUs serve stock openpi), and the endpoint keeps that GPU on a later `pgs up`.
 - `--stock-path` serves openpi's own policy instead of the fast path.
 - `--direct` also serves on a TCP port of the worker's own public address; the Python client then sends its requests
   there instead of through Runpod's gateway (see [Direct port](#direct-port)).
@@ -186,13 +188,16 @@ requests there. The gateway socket stays open: it starts and keeps the worker, c
 requests again if the direct connection cannot be opened or is lost. Nothing changes in billing, scale to zero or
 start time.
 
-- Measured from the US east coast to an RTX 4090 in US-CA-2 (California), with `hot=True` (below): round trip p50
-  111.6 ms direct against 124.8 ms through the gateway, p95 119.5 against 133.8 (same worker, alternating blocks;
-  [docs/BENCHMARKS.md](docs/BENCHMARKS.md)).
+- Measured from the US east coast to an RTX 4090 in US-CA-2 (California), same worker, alternating blocks of
+  requests: the direct port saved about 10 to 12.6 ms per request against the gateway path, and `hot=True` (below)
+  2.3 ms more. Round trip p50 111.6 ms direct with `hot` against 124.8 ms through the gateway, p95 119.5 against
+  133.8 ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)).
 - What you give up: the direct connection does not pass Cloudflare or Runpod's load balancer. It needs outbound TCP
   to a high port of a plain IP address (some company networks block that; the client then stays on the gateway), its
   TLS certificate is the worker's own (pinned by the client, not signed by a public authority), and the port is open
-  to the internet behind the token. `connect(..., direct=False)` keeps a client on the gateway.
+  to the internet behind the token. A reply is one packet: when it is lost, the worker's TCP waits a whole
+  retransmission timeout and that request takes about 385 ms (0.3 to 2 % of direct requests in earlier runs, 1 in
+  2000 in the measured one). `connect(..., direct=False)` keeps a client on the gateway.
 - `connect(..., hot=True)` (any endpoint) asks the worker not to let its thread or GPU idle for about a second after
   each request: 2.3 ms less model time per request at a remote client's pace on an RTX 4090. The worker's CPU
   core and GPU stay busy meanwhile (the GPU draws power as if it were working), so it is off by default.
