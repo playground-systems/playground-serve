@@ -2,6 +2,7 @@
 token from the metadata; the gateway socket stays open for the keep-alive and takes over when the direct one fails."""
 
 import shutil
+import socket
 import time
 
 import pytest
@@ -43,6 +44,17 @@ def test_a_direct_port_that_cannot_be_trusted_or_reached_leaves_the_gateway(obse
             assert client._direct is None and "no direct connection" in caplog.text
             assert client.infer(observations[0])["actions"].shape == (10, 7)
             assert client.timing["path"] == "gateway" and cfg.direct_requests == 0 and cfg.aux_frames == 1
+
+
+def test_a_direct_port_that_never_answers_costs_one_open_timeout(observations, caplog):
+    cfg = Config(direct=True)
+    with MockServer(cfg) as mock, socket.create_server(("127.0.0.1", 0)) as silent:  # takes the TCP connect, no TLS
+        cfg.direct_info["port"] = silent.getsockname()[1]
+        t = time.monotonic()
+        with connect(mock.url, open_timeout=1) as client:
+            assert time.monotonic() - t < 3 and client._direct is None and "no direct connection" in caplog.text
+            assert client.infer(observations[0])["actions"].shape == (10, 7)
+            assert client.timing["path"] == "gateway" and cfg.direct_requests == 0
 
 
 def test_a_lost_direct_connection_falls_back_without_a_reconnect(observations):
