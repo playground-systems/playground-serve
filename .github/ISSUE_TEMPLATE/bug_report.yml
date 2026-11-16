@@ -1,0 +1,57 @@
+name: Bug report
+description: pgs, the client or a worker does not do what the docs say
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste API keys or tokens.** That means your Runpod API key (`rpa_...`), Hugging Face tokens
+        (`hf_...`) and the direct port's token from a worker's metadata. Read every line you paste before you submit;
+        you may shorten endpoint and volume ids. For a security problem, follow SECURITY.md instead of opening an issue.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command you ran
+      description: The whole `pgs` command, or the Python code around `connect(...)`.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model entry
+      description: As `pgs models` lists it, or `CONFIG@CHECKPOINT` for your own checkpoint.
+      placeholder: pi05_libero
+    validations:
+      required: true
+  - type: input
+    id: gpu-region
+    attributes:
+      label: GPU and region
+      description: What `pgs up` or `pgs status` printed.
+      placeholder: RTX 4090 (pool ADA_24) in US-NC-1
+  - type: textarea
+    id: status
+    attributes:
+      label: "`pgs status` output"
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Worker log lines
+      description: >-
+        From the endpoint's logs in the Runpod console: the lines around the error, and any line with `"rs": "path"`,
+        `"rs": "fallback"` or `"rs": "ready"`.
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: "`pgs --version`, Python, and the operating system."
+      placeholder: playground-serve 0.1.0, Python 3.12, macOS 15

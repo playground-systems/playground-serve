@@ -1,0 +1,45 @@
+name: Model request
+description: Ask for a robot policy (VLA) to be served with `pgs up`
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        `pgs models` lists the entries served today. A new model comes in as a model family; CONTRIBUTING.md says how
+        to add one, if you would like to do it yourself.
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      placeholder: Name and version
+    validations:
+      required: true
+  - type: input
+    id: weights
+    attributes:
+      label: Weights
+      description: Hugging Face repository or other download location.
+    validations:
+      required: true
+  - type: input
+    id: code
+    attributes:
+      label: Official inference code
+      description: The repository with the model's own server or evaluation script.
+  - type: input
+    id: license
+    attributes:
+      label: License of the code and the weights
+  - type: textarea
+    id: use
+    attributes:
+      label: Robot and use
+      description: The robot or benchmark you would run it on, and the action rate or round trip you need.
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you add it yourself?
+      options:
+        - Yes, with a pull request
+        - Maybe, with some help
+        - No
