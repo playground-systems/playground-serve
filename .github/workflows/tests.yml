@@ -21,8 +21,8 @@ jobs:
   pytest:
     # The full suite on each Python that `pgs` supports (3.10 and later, _pgs.py). Tests that need openpi, torch or
     # LeRobot skip, as on a laptop: the development environment does not install them (CONTRIBUTING.md). On 3.13
-    # and later the dev group builds numpy 1.26 from source (openpi-client pins numpy below 2); the uv cache keeps
-    # the built wheel for later runs.
+    # and later the dev group builds numpy 1.26 and dm-tree 0.1.8 from source (openpi-client pins numpy below 2);
+    # the uv cache keeps the built wheels for later runs.
     name: pytest (Python ${{ matrix.python }})
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -31,11 +31,22 @@ jobs:
       matrix:
         python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     env:
-      MUJOCO_GL: egl  # tests/run/test_sim.py renders the simulated arm's cameras without a display
+      # dm-tree 0.1.8 bundles an abseil whose headers use uint8_t without <cstdint>, an error under GCC 13.
+      CXXFLAGS: -include cstdint
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      # tests/run/test_sim.py renders the simulated arm's cameras through EGL, here Mesa's software renderer. If apt
+      # fails, MUJOCO_GL stays unset and those tests skip ("MuJoCo cannot render here") instead of failing the job.
+      - name: Install Mesa EGL for MuJoCo
+        run: |
+          pkgs="libegl1 libegl-mesa0 libgl1-mesa-dri"
+          if timeout 180 sudo sh -c "apt-get update -qq && apt-get install -yqq --no-install-recommends $pkgs"; then
+            echo "MUJOCO_GL=egl" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Mesa EGL did not install; tests/run/test_sim.py skips"
+          fi
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
