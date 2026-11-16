@@ -1,5 +1,6 @@
 # Playground Serve
 
+[![Tests](https://github.com/playground-systems/playground-serve/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/playground-systems/playground-serve/actions/workflows/tests.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Python: pgs 3.10+, client 3.8+](https://img.shields.io/badge/python-3.10%2B%20%7C%20client%203.8%2B-blue)](pyproject.toml)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](#status)
@@ -156,6 +157,14 @@ pgs run so101 --instruction "put the cube in the bowl" --dry-run   # reads the a
 pgs run so101 --instruction "put the cube in the bowl"             # asks, then moves for up to 60 s
 ```
 
+<p align="center">
+  <img alt="Top and side camera views of a simulated yellow SO-101 arm on a table with a cube and a red bowl: the arm unfolds from its rest pose and reaches toward the cube and the bowl." src="docs/assets/so101-sim.gif" width="640">
+</p>
+
+A simulated SO-101 (`pgs run so101 --sim`, MuJoCo) driven by `molmoact2_so101` on an RTX 4090: the two camera views
+the model gets, 13 s of a 180 s run at about 3x speed. A plumbing check of the units, timing and limits, not a solved
+task: the rendered scene is not what the model was trained on.
+
 Status: it ran end to end against a simulated arm (`--sim`, MuJoCo) with the real model on an RTX 4090, 180 s at
 29.7 Hz without an error. It has not run on a real SO-101 yet. Setup, units and safety: [docs/RUN.md](docs/RUN.md).
 
@@ -176,20 +185,11 @@ Status: it ran end to end against a simulated arm (`--sim`, MuJoCo) with the rea
 
 ## Contributing
 
-Issues and pull requests are welcome. A new model family is one folder, `src/playground_serve/families/<family>/`,
-and changes no shared file:
-
-1. `spec.py` declares its entries (checkpoint, GPU pools, volume, RAM, action shape, robot, license, secrets);
-   `models.py` finds it by itself.
-2. `serve.py` serves one checkpoint behind the shared websocket server (`families/common/pgs_server.py`), with the
-   model's official inference code as the stock path, checked against the official server on the same inputs.
-3. `build_env.sh` builds its Python environment; `NOTES.md` holds the license, the measurements and the GPU spend.
-4. A fast path ships only with a self-test reference (`selftest_<entry>.json`: a real frame and the stock actions)
-   and falls back to stock.
-5. `tests/families/test_<family>.py`, then `uv run pytest -q` and `scripts/check_release.sh`.
-
-The existing families are the examples; [MODELS.md](MODELS.md#model-families) describes the volume layout and the
-checkpoint URIs.
+Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has the development setup with uv, the
+tests and the release check that run on every pull request, and how to add a model family. A family is one folder,
+`src/playground_serve/families/<family>/`, and changes no shared file; its fast path keeps the weights, precision,
+steps and inputs, and must reproduce the stock actions at every start or the worker serves stock. Security problems go
+through [SECURITY.md](SECURITY.md); the code of conduct is [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## License and credits
 
