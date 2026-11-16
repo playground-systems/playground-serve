@@ -24,6 +24,13 @@ dependencies = [
     "websockets>=14.0; python_version >= '3.9'",
 ]
 
+[project.optional-dependencies]
+# `pgs run so101`: LeRobot's SO-101 follower driver, calibration and OpenCV cameras (LeRobot 0.5 and later need Python
+# 3.12). Pinned: run/so101.py's units and calls were read from this version.
+so101 = ["lerobot[feetech]==0.7.0; python_version >= '3.12'"]
+# `pgs run so101 --sim`: the simulated arm.
+sim = ["mujoco>=3.2"]
+
 [project.urls]
 Homepage = "https://github.com/playground-systems/playground-serve"
 Issues = "https://github.com/playground-systems/playground-serve/issues"
@@ -38,6 +45,7 @@ dev = [
     # The real openpi client, for the client's wire-compatibility tests. It pins numpy below 2.
     "openpi-client @ git+https://github.com/Physical-Intelligence/openpi@215abfb217dbac7d5f1273282331b9b1866c0479#subdirectory=packages/openpi-client",
     "typing-extensions>=4.16.0",  # openpi-client imports it without declaring it
+    "mujoco>=3.2",  # tests/run/test_sim.py
 ]
 
 [build-system]
@@ -57,6 +65,8 @@ allow-direct-references = true
 # The lock (the development environment) stays on 3.10+; the client's 3.8 check uses its own venv
 # (tests/client/test_import.py says how).
 environments = ["python_version >= '3.10'"]
+# LeRobot needs numpy 2, the dev group's openpi-client numpy below 2 (docs/RUN.md, Development, tests both).
+conflicts = [[{ extra = "so101" }, { group = "dev" }]]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

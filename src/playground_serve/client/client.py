@@ -14,7 +14,8 @@ request sent in two frames on two sockets (docs/WIRE.md, "Split requests"); "dir
 whose URL holds the query `rs_hot=1` keeps the server hot between its requests (docs/WIRE.md, "Hot").
 
 Image settings from the metadata (any server may send them):
-"image_size", [H, W] or an int, is the size the resize and jpeg modes send; "image_mode", one of MODES, is the default
+"image_size", [H, W] or an int, is the size the resize and jpeg modes send, and "native" keeps every image at its own
+size (no resize, no padding: the model resizes the camera frame itself); "image_mode", one of MODES, is the default
 mode. An explicit `size` or `mode` argument wins.
 """
 
@@ -72,8 +73,9 @@ class Policy:
 
     mode None (the default) picks, at every connect, the metadata's `image_mode` if the server sends one (jpeg only
     if it advertises jpeg), else `jpeg` when the server advertises it and `resize` otherwise; an explicit mode is always
-    used. size None (the default) is the metadata's `image_size` ([H, W] or an int) if any, else IMAGE_SIZE (224); an
-    explicit size (int or (H, W)) is always used. `size` holds the (H, W) in use. After each call `timing` holds payload_bytes, encode_ms (image transform +
+    used. size None (the default) is the metadata's `image_size` ([H, W], an int or "native") if any, else IMAGE_SIZE
+    (224); an explicit size (int, (H, W) or "native") is always used. `size` holds the (H, W) in use, None for
+    "native" (each image keeps its own size). After each call `timing` holds payload_bytes, encode_ms (image transform +
     msgpack), rtt_ms (send to reply received), infer_ms (the server's, or None) and unpack_ms.
 
     keepalive: when the server advertises `noop` and nothing was sent for this many seconds, a background thread sends
@@ -253,12 +255,16 @@ class Policy:
         return ws
 
     def encode(self, obs: dict) -> bytes:
-        return packb(encode_images(obs, self.mode, self.size, self.jpeg_quality))
+        return packb(encode_images(obs, self.mode, self.size, self.jpeg_quality, self._stacks()))
+
+    def _stacks(self) -> bool:
+        """Whether the server decodes frame stacks and lists in jpeg mode (codec.encode_images)."""
+        return self.features.get("jpeg_stack") is True
 
     def _frames(self, obs: dict):
         """(the request frame, the second socket's frame or None). Split: every second image, largest first, goes
         to the second socket; both frames carry SPLIT_KEY: [session id, request number]."""
-        enc = encode_images(obs, self.mode, self.size, self.jpeg_quality)
+        enc = encode_images(obs, self.mode, self.size, self.jpeg_quality, self._stacks())
         if self._aux is not None and isinstance(enc, dict):
             images = sorted((k for k, v in enc.items() if isinstance(v, dict) and v.get(JPEG_KEY) is True),
                             key=lambda k: -len(enc[k][b"data"]))
@@ -429,8 +435,13 @@ class Policy:
         self.close()
 
 
-def _height_width(size) -> tuple:
-    """(H, W) from an int, an [H, W] pair or None (IMAGE_SIZE); anything else is IMAGE_SIZE too."""
+NATIVE = "native"  # image_size: every image keeps its own size
+
+
+def _height_width(size):
+    """(H, W) from an int, an [H, W] pair or None (IMAGE_SIZE); None for NATIVE; anything else is IMAGE_SIZE too."""
+    if size == NATIVE:
+        return None
     if isinstance(size, int) and not isinstance(size, bool) and size > 0:
         return (size, size)
     if isinstance(size, (list, tuple)) and len(size) == 2 and all(isinstance(n, int) and n > 0 for n in size):

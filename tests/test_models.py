@@ -11,7 +11,7 @@ WORKER = pathlib.Path(models.__file__).parent / "worker"
 
 
 def test_names_and_get():
-    names = models.names()
+    names = models.names("openpi")  # the other families: tests/test_families.py
     assert names[0] == "pi05_libero"
     assert len(names) == len(set(names))
     for name in names:
@@ -39,7 +39,7 @@ def test_pi05_libero_is_todays_model():
     assert spec.volume_gb == 40 and spec.gpu_validated
     assert spec.image == "runpod/pytorch:1.5.0-cu1281-torch280-ubuntu2404"
     assert set(spec.gpu_pools) == {"ADA_24", "AMPERE_48"}  # the two pools it has run on (docs/BENCHMARKS.md)
-    assert [n for n in models.names() if models.get(n).gpu_validated] == ["pi05_libero"]
+    assert [n for n in models.names("openpi") if models.get(n).gpu_validated] == ["pi05_libero", "pi05_droid"]
 
 
 def test_unknown_name():

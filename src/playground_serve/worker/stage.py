@@ -1,7 +1,13 @@
 """Worker staging, standard library only: it runs on the base image's python3 before the openpi environment exists.
 
     stage.py fetch URI DEST [WAIT_FOR]      download a checkpoint to DEST (container disk) in parallel HTTP ranges: a
-                                            public GCS directory gs://BUCKET/PATH. With WAIT_FOR, only 4 streams until that file exists
+                                            public GCS directory gs://BUCKET/PATH, a Hugging Face repo
+                                            hf://REPO@REVISION[/SUBFOLDER] (every file at that revision, or under
+                                            SUBFOLDER with paths relative to it; HF_TOKEN, if set, goes to
+                                            huggingface.co only) or one https:// file. RS_CKPT_FILES (comma-separated
+                                            fnmatch patterns of relative paths) keeps only matching files. A DEST
+                                            that is already a complete copy of the same file list is kept as it is.
+                                            With WAIT_FOR, only 4 streams until that file exists
                                             (the environment build gets the bandwidth first). DEST/.rs_small marks the
                                             small files done (norm stats, metadata), DEST/.rs_complete everything
     stage.py check DIR                      exit 0 if DIR is a complete copy (its .rs_complete lists every file's size)
@@ -20,6 +26,7 @@ mid-copy) leaves only temporary names or no marker, which a later boot ignores: 
 from __future__ import annotations
 
 import concurrent.futures
+import fnmatch
 import json
 import threading
 import os
@@ -33,15 +40,17 @@ import urllib.parse
 import urllib.request
 
 GCS = "https://storage.googleapis.com"  # public buckets need no credentials
+HF = "https://huggingface.co"  # public repos need no token
 HEADERS = {"User-Agent": "playground-serve-worker"}  # Cloudflare-fronted hosts refuse urllib's default one
 MARKER = ".rs_complete"
 SMALL = ".rs_small"
 PENDING = ".rs_pending"  # serve.py: the fast path's checked copy is still being written; its marker comes after
 PENDING_TIMEOUT_S = 900
+FETCHING = ".rs_fetching"  # `stage.py fetch` is writing this directory; holds its process id
 CHUNK = 32 << 20
 THREADS, SLOW_THREADS = 48, 4
 READY = "/tmp/rs_ready"
-ENV_DIR = os.environ.get("RS_ENV_DIR", "/opt/rs")  # openpi checkout + .venv (boot.sh)
+ENV_DIR = os.environ.get("RS_ENV_DIR", "/opt/rs")  # openpi: checkout + .venv; other families: /opt/pgs (boot.sh)
 ENV_OK = "/opt/rs_env_ok"  # boot.sh: ENV_DIR holds a complete environment
 
 
@@ -72,6 +81,15 @@ def complete(root: str | pathlib.Path) -> bool:
         return False
 
 
+def fetching(root: str | pathlib.Path) -> bool:
+    """True while a `stage.py fetch` process writes root (its .rs_fetching names a live process)."""
+    try:
+        os.kill(int((pathlib.Path(root) / FETCHING).read_text()), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def mark(root: pathlib.Path, files: dict[str, int]) -> None:
     tmp = root / (MARKER + ".tmp")
     with open(tmp, "w") as f:
@@ -96,8 +114,16 @@ def tar_ok(tar: str | pathlib.Path) -> bool:
 
 
 # ----- download
+def _request(url: str, headers: dict | None = None, method: str | None = None) -> urllib.request.Request:
+    """A request with HEADERS; to huggingface.co also HF_TOKEN, as a header that a redirect to another host drops."""
+    req = urllib.request.Request(url, headers={**HEADERS, **(headers or {})}, method=method)
+    if url.startswith(HF + "/") and os.environ.get("HF_TOKEN", "").strip():
+        req.add_unredirected_header("Authorization", f"Bearer {os.environ['HF_TOKEN'].strip()}")
+    return req
+
+
 def _json(url: str):
-    with urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS), timeout=30) as r:
+    with urllib.request.urlopen(_request(url), timeout=30) as r:
         return json.load(r)
 
 
@@ -113,19 +139,43 @@ def gcs_objects(bucket: str, prefix: str) -> list[dict]:
 
 
 def listing(uri: str) -> list[tuple[str, int, str]]:
-    """(path relative to the destination, size, download URL) of every file of a checkpoint URI."""
+    """(path relative to the destination, size, download URL) of every file of a checkpoint URI that matches
+    RS_CKPT_FILES (all if unset)."""
+    patterns = [p.strip() for p in os.environ.get("RS_CKPT_FILES", "").split(",") if p.strip()]
+    return [o for o in _listing(uri) if not patterns or any(fnmatch.fnmatch(o[0], p) for p in patterns)]
+
+
+def _listing(uri: str) -> list[tuple[str, int, str]]:
     if uri.startswith("gs://"):
         bucket, _, path = uri.removeprefix("gs://").partition("/")
         prefix = path.strip("/") + "/"
         return [(o["name"][len(prefix):], int(o["size"]), f"{GCS}/{bucket}/{urllib.parse.quote(o['name'])}")
                 for o in gcs_objects(bucket, prefix) if not o["name"].endswith("/")]
-    raise ValueError(f"cannot download {uri}: not gs://")
+    if uri.startswith("hf://"):  # every file of the repo at that revision (under the subfolder), with its size
+        repo, _, rest = uri.removeprefix("hf://").partition("@")
+        rev, _, sub = rest.partition("/")
+        prefix = sub.strip("/") + "/" if sub.strip("/") else ""
+        info = _json(f"{HF}/api/models/{repo}/revision/{rev or 'main'}?blobs=true")
+        return [(s["rfilename"][len(prefix):], int(s["size"]),
+                 f"{HF}/{repo}/resolve/{info['sha']}/{urllib.parse.quote(s['rfilename'])}")
+                for s in info["siblings"] if s["rfilename"].startswith(prefix)]
+    if uri.startswith("https://"):  # one file
+        with urllib.request.urlopen(_request(uri, method="HEAD"), timeout=30) as r:
+            return [(pathlib.PurePosixPath(urllib.parse.urlparse(uri).path).name, int(r.headers["Content-Length"]), uri)]
+    raise ValueError(f"cannot download {uri}: not gs://, hf:// or https://")
+
+
+def final_url(url: str) -> str:
+    """Where `url` redirects to (Hugging Face sends large files to its CDN with a signed URL), asked once per file so
+    that each range request goes straight there instead of through another redirect."""
+    with urllib.request.urlopen(_request(url, {"Range": "bytes=0-0"}), timeout=30) as r:
+        return r.geturl()
 
 
 def _get_range(url: str, target: pathlib.Path, offset: int, n: int) -> int:
     for attempt in range(6):
         try:
-            req = urllib.request.Request(url, headers={**HEADERS, "Range": f"bytes={offset}-{offset + n - 1}"})
+            req = _request(url, {"Range": f"bytes={offset}-{offset + n - 1}"})
             got = 0
             with urllib.request.urlopen(req, timeout=60) as r, open(target, "r+b") as f:
                 if r.status != 206 and offset:  # the whole object instead of the range: not what was asked
@@ -147,14 +197,18 @@ def fetch(uri: str, dest: str | pathlib.Path, wait_for: str | None = None) -> di
     Small files come first (dest/.rs_small once they are all there); dest/.rs_complete is written last. With
     `wait_for`, at most SLOW_THREADS ranges are in flight until that path exists."""
     dest = pathlib.Path(dest)
-    for flag in (".rs_failed", SMALL, MARKER):
-        (dest / flag).unlink(missing_ok=True)
-    objects = listing(uri)
+    objects = listing(uri)  # before any flag is removed: a URI that cannot be listed leaves a complete copy alone
     if not objects:
         raise FileNotFoundError(f"no objects under {uri}")
+    if complete(dest) and json.loads((dest / MARKER).read_text())["files"] == {rel: size for rel, size, _ in objects}:
+        return {rel: size for rel, size, _ in objects}  # a restarted container: the same files are already here
+    for flag in (".rs_failed", SMALL, MARKER):
+        (dest / flag).unlink(missing_ok=True)
     files, jobs = {}, []
     for rel, size, url in objects:
         files[rel] = size
+        if url.startswith(HF) and size > CHUNK:
+            url = final_url(url)
         target = dest / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         with open(target, "wb") as f:
@@ -300,13 +354,17 @@ def main(argv: list[str]) -> int:
     if cmd == "fetch":
         t0 = time.time()
         log("ckpt_fetch_start", uri=argv[1], dest=argv[2])
+        running = pathlib.Path(argv[2]) / FETCHING
+        running.parent.mkdir(parents=True, exist_ok=True)
+        running.write_text(str(os.getpid()))
         try:
             files = fetch(argv[1], argv[2], argv[3] if len(argv) > 3 else None)
         except Exception as e:
             log("ckpt_fetch_failed", error=str(e)[:300])
-            pathlib.Path(argv[2]).mkdir(parents=True, exist_ok=True)
             (pathlib.Path(argv[2]) / ".rs_failed").write_text(str(e)[:300])
             return 1
+        finally:
+            running.unlink(missing_ok=True)
         n, s = sum(files.values()), time.time() - t0
         log("ckpt_fetch_done", bytes=n, files=len(files), s=round(s, 1), mb_s=round(n / s / 1e6))
         return 0

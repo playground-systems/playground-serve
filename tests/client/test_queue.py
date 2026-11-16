@@ -81,11 +81,36 @@ def run_loop(q: ActionQueue, observations, seconds: float, hz: float = 50) -> tu
 def test_queue_feeds_control_loop(observations):
     cfg = Config(infer_ms=20, net_p50_ms=10, net_p95_ms=20)
     with MockServer(cfg) as mock, connect(mock.url) as policy, ActionQueue(policy, threshold=0.5) as q:
-        actions, slowest = run_loop(q, observations, 1.0)
+        actions, _ = run_loop(q, observations, 1.0)
         assert all(a.shape == (7,) for a in actions if a is not None)
-        assert slowest < 20  # the loop never waited on the network
         assert q.chunks >= 5 and q.requests - q.chunks <= 1 and q.errors == 0
         assert q.empty_ticks <= 5  # the first chunk (one round trip) and little else at 50 Hz with ~40 ms replies
+
+
+def test_the_control_loop_never_waits_on_the_network(observations):
+    """put_observation and get_action return while a request is in flight: here one that never returns until the
+    end of the test, so a loop that waited on it could not finish (no timing margin involved)."""
+    inside, release = threading.Event(), threading.Event()
+
+    class Stuck:  # a policy whose request is in flight until `release`
+        timing = {"rtt_ms": 0.0}
+
+        def infer(self, obs):
+            inside.set()
+            release.wait(60)
+            return {"actions": rows(0, 10)}
+
+    with ActionQueue(Stuck(), threshold=0.5) as q:
+        q.put_observation(observations[0])
+        assert inside.wait(30)  # the queue's thread is inside the request
+        taken = []
+        loop = threading.Thread(target=lambda: taken.extend(
+            (q.put_observation(observations[i % 4]), q.get_action())[1] for i in range(200)))
+        loop.start()
+        loop.join(30)
+        finished = not loop.is_alive()
+        release.set()
+        assert finished and taken == [None] * 200 and q.empty_ticks >= 200
 
 
 def test_queue_survives_dropped_sockets(observations):

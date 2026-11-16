@@ -1,4 +1,4 @@
-"""pgs (Playground Serve) command line: up, demo, down, status, delete, models."""
+"""pgs (Playground Serve) command line: up, demo, down, status, delete, models, run."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ def read_key(key_file: str | None) -> str:
 
 
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="pgs", description="Serve an openpi robot policy on a Runpod serverless GPU.",
+    p = argparse.ArgumentParser(prog="pgs", description="Serve a robot policy on a Runpod serverless GPU.",
                                 epilog=f"State: ${state.HOME_ENV}/state.json (one per project if you like), default "
                                        "~/.config/playground-serve/state.json. Its owner id is in the name of every "
                                        "resource it creates; up, down and delete act only on those.")
@@ -69,8 +69,9 @@ def parser() -> argparse.ArgumentParser:
                    "day, else by this machine's time zone; the probe runs while the worker starts)")
     s.add_argument("--gpu", metavar="GPU", help="GPU for the endpoint instead of the model's default pools, by name or "
                    "Runpod pool, e.g. H200 or HOPPER_141 (`pgs up` prints its price before it creates anything)")
-    s.add_argument("--stock-path", action="store_true", help="serve openpi's own policy instead of the fast path "
-                   "(realtime-vla graph, the default for pi05_libero on an RTX 4090; same weights, checked at boot)")
+    s.add_argument("--stock-path", action="store_true", help="serve the model's own stock inference instead of the "
+                   "fast path (for pi05_libero on an RTX 4090 the realtime-vla graph; MODELS.md lists each model's; "
+                   "same weights, checked at boot)")
     s.add_argument("--direct", action="store_true", help="also serve on a TCP port of the worker's own public address, "
                    "so requests skip Runpod's gateway (about 11 ms less per request from the US east coast to "
                    "US-CA-2); TLS with the worker's own certificate, no Cloudflare in front; still serverless")
@@ -79,7 +80,8 @@ def parser() -> argparse.ArgumentParser:
                    "owner (or a `pgs` from before owner ids) created")
     g.add_argument("--new", action="store_true", help="create your own even if another owner has one for this model")
     s = sub.add_parser("demo", parents=[common], help="send a dummy observation to a running model and print the "
-                       "actions' shape and the round trip (LIBERO models; starts a worker if none runs)")
+                       "actions' shape and the round trip (openpi LIBERO models and families with an example "
+                       "observation; starts a worker if none runs)")
     s.add_argument("model", nargs="?", default="pi05_libero", help="model name or wss:// URL (default pi05_libero)")
     s = sub.add_parser("down", parents=[common], help="keep no worker: GPU billing stops once idle, the volume stays")
     s.add_argument("model", nargs="?", help="model name (default: all of yours)")
@@ -89,8 +91,12 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("model")
     s.add_argument("--volume", action="store_true", help="also delete the network volume")
     s.add_argument("--force", action="store_true", help="also delete another owner's endpoint or volume of this model")
+    s.add_argument("--yes", action="store_true", help="delete without asking (needed without a terminal)")
     sub.add_parser("models", parents=[common], help="every model with its GPU, hourly price, whether it ran on a GPU, "
                    "and its license note; read only, works without a key (then with list prices)")
+    from .run import add_parser as add_run_parser
+
+    add_run_parser(sub, common)
     return p
 
 
@@ -122,7 +128,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     key = ""
     try:
-        key = read_key(args.key_file)
+        if args.command == "run" and WS_URL.match(args.model or ""):
+            key = resolve_key(None, args.key_file) or ""  # a ws:// URL of your own server needs no Runpod key
+        else:
+            key = read_key(args.key_file)
+        if args.command == "run":
+            from .run import main as run_main
+
+            return run_main(args, key, out=say)
         if args.command == "demo":
             demo(args.model, key)
             return 0
@@ -141,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "status":
             launcher.status()
         else:
-            launcher.delete(args.model, args.volume, force=args.force)
+            launcher.delete(args.model, args.volume, force=args.force, yes=args.yes)
         return 0
     except KeyboardInterrupt:
         return 130
@@ -153,19 +166,24 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def demo(target: str, key: str) -> None:
-    """pgs demo: example_obs (LIBERO) through the model's endpoint; every failure becomes one sentence."""
+    """pgs demo: example_obs (openpi LIBERO) or the family's example observation through the model's endpoint; every
+    failure becomes one sentence."""
     from . import demo as demo_mod, models
 
+    make = demo_mod.example_obs
     if not WS_URL.match(target):
         try:
-            robot = models.get(target).robot
+            spec = models.get(target)
         except (KeyError, ValueError) as e:
             raise LauncherError(str(e).strip("'\"")) from None
-        if robot != "libero":
-            raise LauncherError(f"pgs demo has an example observation for LIBERO models (pi05_libero) only; for "
-                                f"{target}, call connect() with your robot's observation (README).")
+        if spec.family != "openpi" and models.example_observation(spec.name) is not None:
+            make = lambda seed=0: models.example_observation(spec.name)  # noqa: E731
+        elif spec.family != "openpi" or spec.robot != "libero":
+            raise LauncherError(f"pgs demo has an example observation for LIBERO models (pi05_libero) only, and for "
+                                f"model families whose spec has one; for {target}, call connect() with your robot's "
+                                "observation (README, MODELS.md).")
     try:
-        demo_mod.run(target, key, out=say)
+        demo_mod.run(target, key, out=say, make_obs=make)
         say("Done. With no client connected the worker stops by itself after its idle time (5 min unless `pgs up "
             "--idle` set another); `pgs down` stops it within about a minute.")
     except Exception as e:  # noqa: BLE001  (a sentence for a first-day user, not a traceback)

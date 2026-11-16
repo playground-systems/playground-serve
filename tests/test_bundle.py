@@ -1,14 +1,16 @@
 """RS_FILES determinism and round trip, the env map, and pi05_libero's map against the first release that served."""
 
 import base64
-import gzip
+import io
 import json
+import lzma
+import os
 import pathlib
 import py_compile
 import random
 import subprocess
+import sys
 import tarfile
-import io
 
 import pytest
 
@@ -52,10 +54,9 @@ def test_pack_is_deterministic():
     first = bundle.pack(files)
     assert bundle.pack(dict(reversed(list(files.items())))) == first
     assert bundle.endpoint_env(models.get("pi05_droid"), "r1") == bundle.endpoint_env(models.get("pi05_droid"), "r1")
-    gz = base64.b64decode(first)
-    assert gz[:4] == b"\x1f\x8b\x08\x00"  # gzip, deflate, no flags: no file name
-    assert gz[4:10] == b"\x00\x00\x00\x00\x02\xff"  # mtime 0, max compression, OS unknown (not the platform's)
-    raw = gzip.decompress(gz)
+    xz = base64.b64decode(first)
+    assert xz[:6] == b"\xfd7zXZ\x00"  # an xz stream: no file name, no time
+    raw = lzma.decompress(xz)
     for marker in (b"PaxHeader", b"LIBARCHIVE", b"com.apple"):
         assert marker not in raw
     with tarfile.open(fileobj=io.BytesIO(raw)) as tar:
@@ -72,26 +73,31 @@ def test_round_trip_python():
 
 
 def test_round_trip_start_command(tmp_path):
-    """The start command's unpack step with the system's base64 and tar gives back the same bytes."""
+    """The start command's unpack step with python3 (only its standard library) and the system's tar gives back the
+    same bytes."""
     script = bundle.START_COMMAND[2]
     unpack_step, run_step = script.split(" && exec ")
     assert run_step == "bash /rs/boot.sh"
-    env = {"RS_FILES": bundle.pack(bundle.worker_files()), "PATH": "/usr/bin:/bin"}
+    path = f"{os.path.dirname(sys.executable)}:/usr/bin:/bin"  # a python3 there, as the image has one on its PATH
+    env = {"RS_FILES": bundle.pack(bundle.worker_files()), "PATH": path}
     subprocess.run(["bash", "-c", unpack_step.replace("/rs", str(tmp_path / "rs"))], env=env, check=True)
     out = {p.relative_to(tmp_path / "rs").as_posix(): p.read_bytes() for p in (tmp_path / "rs").rglob("*") if p.is_file()}
     assert out == bundle.worker_files()
+    env["RS_FILES"] = "not a bundle"  # a failed unpack stops the start (pipefail): boot.sh does not run
+    assert subprocess.run(["bash", "-c", unpack_step.replace("/rs", str(tmp_path / "rs2"))], env=env,
+                          capture_output=True).returncode != 0
 
 
 def test_env_size_limit(monkeypatch):
     env = bundle.endpoint_env(models.get("pi05_libero"), "r1")
-    assert len(env["RS_FILES"]) < 80_000  # about 66 kB (the fast path's files), under the 128 KiB per-string limit
+    assert len(env["RS_FILES"]) < 80_000  # about 72 kB (the fast path's files), under the 128 KiB per-string limit
     big = {name: random.Random(name).randbytes(20_000) for name in bundle.WORKER_FILES}  # incompressible: 320 kB base64
     monkeypatch.setattr(bundle, "worker_files", lambda: big)
     with pytest.raises(ValueError, match="RS_FILES"):
         bundle.endpoint_env(models.get("pi05_libero"), "r1")
 
 
-@pytest.mark.parametrize("name", models.names())
+@pytest.mark.parametrize("name", models.names("openpi"))
 def test_env_map_per_model(name):
     spec = models.get(name)
     env = bundle.endpoint_env(spec, "r1")

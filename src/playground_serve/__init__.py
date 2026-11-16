@@ -6,7 +6,7 @@
 """
 
 __version__ = "0.1.0"
-__all__ = ["ActionQueue", "Policy", "ServerError", "Status", "connect", "example_obs", "status"]
+__all__ = ["ActionQueue", "History", "Policy", "ServerError", "Status", "connect", "example_obs", "status"]
 
 
 def __getattr__(name: str):
@@ -20,6 +20,10 @@ def __getattr__(name: str):
         from . import client
 
         return getattr(client, name)
+    if name == "History":
+        from .client.history import History
+
+        return History
     if name == "example_obs":
         from .demo import example_obs
 

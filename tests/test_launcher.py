@@ -640,6 +640,34 @@ def test_delete_asks_and_removes_endpoint_and_volume(env):
     assert state.load(path)["models"] == {}
 
 
+def test_delete_without_a_terminal_says_to_pass_yes(env, monkeypatch, capsys):
+    import io
+
+    api, launcher, out, path = env
+    launcher().up("pi05_libero")
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))  # a script or CI job: no terminal
+    with pytest.raises(LauncherError, match=r"Delete endpoint playground-serve-.*\? pgs asks before it deletes, and "
+                                            r"this is not a terminal: .* pass --yes .* Nothing deleted\."):
+        launcher().delete("pi05_libero", volume=True)
+    assert len(api.endpoints) == 1 and len(api.volumes) == 1
+    monkeypatch.setattr(state, "default_path", lambda: path)
+    monkeypatch.setattr(cli, "RunpodApi", lambda key: api)
+    monkeypatch.setenv("RUNPOD_API_KEY", "test-key")
+    assert cli.main(["delete", "pi05_libero", "--volume"]) == 1
+    err = capsys.readouterr().err
+    assert "pass --yes" in err and "Traceback" not in err and len(api.endpoints) == 1
+    assert cli.main(["delete", "pi05_libero", "--volume", "--yes"]) == 0
+    assert api.endpoints == {} and api.volumes == {}
+
+
+def test_closed_input_on_a_terminal_is_a_no(monkeypatch):
+    from playground_serve import launcher as launcher_module
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True, raising=False)
+    monkeypatch.setattr("builtins.input", lambda q: (_ for _ in ()).throw(EOFError))
+    assert launcher_module.ask("Delete x? [y/N] ") is False
+
+
 def test_delete_without_flag_keeps_the_volume(env):
     api, launcher, out, _ = env
     launcher().up("pi05_libero")

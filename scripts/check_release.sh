@@ -2,11 +2,13 @@
 # Release check: fails if the tree holds anything that must not be published: API keys and tokens, home-directory
 # paths, e-mail or IP addresses, Runpod resource ids or owner ids, account balances, key or state files, or names on a
 # private denylist. The denylist is stored as SHA-256 hashes of lower-case words (with - _ . / removed), so this script
-# does not publish the words it looks for. Usage: scripts/check_release.sh [DIR] (default: the repository root).
+# does not publish the words it looks for. Usage: scripts/check_release.sh [DIR] (default: the repository root). In a
+# git work tree it checks the files git tracks there (`git ls-files`, the files that get published; never .git, which
+# in a worktree is a file naming a local path); elsewhere, such as an unpacked wheel or sdist, every file under DIR.
 set -euo pipefail
 ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
 exec python3 - "$ROOT" <<'PY'
-import hashlib, os, re, sys
+import hashlib, os, re, subprocess, sys
 
 root = sys.argv[1]
 SKIP_DIRS = {".git", ".venv", "venv", "dist", "build", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache"}
@@ -38,7 +40,7 @@ PATTERNS = {
     "old project name": r"(?i)robo[-]serve|\brs[-]pi05",
 }
 # Tokens the resource-id pattern matches that are not ids (package tags, model names, CUDA builds).
-NOT_IDS = {"manylinux2014", "manylinux2010", "ubuntu2404"}
+NOT_IDS = {"manylinux2014", "manylinux2010", "ubuntu2404", "robocasa365", "cu12torch2"}
 # The pre-rename wire key (robo, underscore, serve) is still accepted by the client, in these files only.
 OLD_WIRE_KEY_FILES = ("playground_serve/client/client.py", "playground_serve/client/mock_server.py", "docs/WIRE.md",
                       "tests/test_connect.py")  # matched as path endings, so a built wheel or sdist checks too
@@ -54,37 +56,54 @@ def denylisted(text):
                for n in DENY_LENGTHS for i in range(len(norm) - n + 1))
 
 
-for dirpath, dirnames, filenames in os.walk(root):
-    dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and not d.endswith(".egg-info"))
-    for name in sorted(filenames + [d for d in dirnames if d == ".claude"]):
-        path = os.path.join(dirpath, name)
-        rel = os.path.relpath(path, root)
-        if FORBIDDEN_NAMES.search(rel):
-            hits.append(f"{rel}: file or folder that must not be published")
-        if denylisted(rel):
-            hits.append(f"{rel}: private name in the path")
-        if not os.path.isfile(path):
-            continue
-        data = open(path, "rb").read()
-        binary = b"\0" in data[:8192]
-        # Binary files: only their printable runs (like `strings`), so random bytes do not match.
-        text = (" ".join(m.decode() for m in re.findall(rb"[\x20-\x7e]{6,}", data)) if binary
-                else data.decode("utf-8", "replace"))
-        for label, rx in compiled.items():
-            for m in rx.finditer(text):
-                if label == "Runpod resource id" and (binary or m.group() in NOT_IDS
-                                                      or re.fullmatch(r"\d+e\d+", m.group())):  # 2.3819763e38
-                    continue
-                if label == "IP address" and rel == "uv.lock":
-                    continue  # four-part version numbers
-                line = text.count("\n", 0, m.start()) + 1
-                hits.append(f"{rel}:{line}: {label}: {m.group()[:40]}")
-        for m in re.finditer(r"robo[_]serve", text):
-            if not rel.endswith(OLD_WIRE_KEY_FILES):
-                hits.append(f"{rel}:{text.count(chr(10), 0, m.start()) + 1}: old wire key outside the allowed files")
-        for number, line in enumerate(text.splitlines(), 1):
-            if denylisted(line):
-                hits.append(f"{rel}:{number}: private name (denylist)")
+def tracked(root):
+    """Paths git tracks under root (relative to it), with each .claude folder they are in; None outside a work tree
+    or when git tracks nothing there (an unpacked package inside an ignored folder)."""
+    try:
+        out = subprocess.run(["git", "-C", root, "ls-files", "-z"], capture_output=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    files = [p for p in out.decode("utf-8", "replace").split("\0") if p]
+    folders = {"/".join(p.split("/")[:i]) for p in files for i in range(1, p.count("/") + 1)}
+    return sorted(files + [d for d in folders if d.rsplit("/", 1)[-1] == ".claude"]) or None
+
+
+def walked(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and not d.endswith(".egg-info"))
+        for name in sorted(filenames + [d for d in dirnames if d == ".claude"]):
+            yield os.path.relpath(os.path.join(dirpath, name), root)
+
+
+for rel in tracked(root) or walked(root):
+    path, name = os.path.join(root, rel), os.path.basename(rel)
+    if FORBIDDEN_NAMES.search(rel):
+        hits.append(f"{rel}: file or folder that must not be published")
+    if denylisted(rel):
+        hits.append(f"{rel}: private name in the path")
+    if not os.path.isfile(path):
+        continue
+    data = open(path, "rb").read()
+    # Self-test references hold JPEG frames as base64, whose random runs look like resource ids: like binary data.
+    binary = b"\0" in data[:8192] or re.fullmatch(r"selftest_[\w.-]+\.json", name) is not None
+    # Binary files: only their printable runs (like `strings`), so random bytes do not match.
+    text = (" ".join(m.decode() for m in re.findall(rb"[\x20-\x7e]{6,}", data)) if binary
+            else data.decode("utf-8", "replace"))
+    for label, rx in compiled.items():
+        for m in rx.finditer(text):
+            if label == "Runpod resource id" and (binary or m.group() in NOT_IDS
+                                                  or re.fullmatch(r"\d+e\d+", m.group())):  # 2.3819763e38
+                continue
+            if label == "IP address" and rel == "uv.lock":
+                continue  # four-part version numbers
+            line = text.count("\n", 0, m.start()) + 1
+            hits.append(f"{rel}:{line}: {label}: {m.group()[:40]}")
+    for m in re.finditer(r"robo[_]serve", text):
+        if not rel.endswith(OLD_WIRE_KEY_FILES):
+            hits.append(f"{rel}:{text.count(chr(10), 0, m.start()) + 1}: old wire key outside the allowed files")
+    for number, line in enumerate(text.splitlines(), 1):
+        if denylisted(line):
+            hits.append(f"{rel}:{number}: private name (denylist)")
 
 if hits:
     print("Release check FAILED:\n  " + "\n  ".join(hits))

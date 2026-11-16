@@ -48,7 +48,7 @@ import dataclasses
 from dataclasses import dataclass
 
 from . import __version__, region
-from .runpod_api import ApiError
+from .runpod_api import ApiError, encode
 
 PREFIX = "playground-serve-"
 # Names from before owner ids have no owner part: playground-serve-<model>-<6 hex>.
@@ -74,7 +74,9 @@ SCALING = {"type": "REQUEST_COUNT", "requestCount": 4}
 # a fresh container.
 FLASHBOOT = "OFF"
 TIMEOUT_MS = 3_600_000
-FIRST_BOOT_TIMEOUT_S, BOOT_TIMEOUT_S = 30 * 60, 15 * 60
+# A later start reads the environment and weights from the volume; on a slow host that took 15 min 38 s for a MolmoAct2
+# entry (29 GB at about 45 MB/s plus a container restart), so the limit leaves room above that.
+FIRST_BOOT_TIMEOUT_S, BOOT_TIMEOUT_S = 30 * 60, 25 * 60
 # The gateway holds a request while the worker starts, but does not reliably hand it over once the worker is ready
 # (forwarded 0.7 s after ready once; another time a 10 s hold that spanned ready timed out): short attempts, back to back.
 GATEWAY_HOLD_S = 3
@@ -82,6 +84,11 @@ PROGRESS_EVERY_S = 15  # a worker log read blocks for LOG_READ_S, so the wait re
 LOG_READ_S = 2
 FILL_TIMEOUT_S = 20 * 60
 RELEASE_KEY = "RS_RELEASE_ID"
+# Runpod refuses a create or update request that it expands past 102400 bytes (HTTP 413, "Expanded upstream request
+# exceeds the 102400 byte limit"). Measured 2026-11-16 with dummy endpoints: a 100,300-byte create request was accepted
+# and a 100,400-byte one refused. `up` measures its largest request before it creates anything (_check_size).
+MAX_REQUEST_BYTES = 100_300
+ISSUES = "https://github.com/playground-systems/playground-serve/issues"
 RECYCLE_WAIT_S = 90  # after workers max 0, until no worker of the endpoint is listed as running (5 s measured)
 PROBE_GRACE_S = 2  # at ready, how long a region probe still running may finish before it is stopped
 NEARER_MS = 10  # a measured data center this much nearer than the endpoint's gets a hint how to move
@@ -93,6 +100,9 @@ BILLING_PAGE = "https://console.runpod.io/user/billing"
 FIRST_BOOT_NOTE = ("First start on this volume: the worker builds the Python environment and downloads the "
                    "checkpoint on its own disk (about 1 to 1.5 minutes), then saves both to the volume in the "
                    "background.")
+FAMILY_FIRST_BOOT_NOTE = ("First start on this volume: the worker builds the model's Python environment and downloads "
+                          "its checkpoint on its own disk (several minutes for a large checkpoint; MODELS.md has "
+                          "measured times), then saves both to the volume in the background.")
 FILL_NOTE = ("The worker is now saving the environment and checkpoint to the volume (a few minutes, while it serves); "
              "`pgs down` waits for that, so that later starts take about 1 minute.")
 # What the worker is doing after it printed {"rs": <key>} (worker/boot.sh, stage.py and serve.py log lines).
@@ -118,10 +128,18 @@ PHASES = {
     "fast_restore": "converting the checkpoint for the fast path",
     "fast_gpu_convert": "checkpoint converted, building the fast path's CUDA graph",
     "fast_convert": "checkpoint converted, building the fast path's CUDA graph",
-    "fast_built": "fast path built, checking its actions against stock openpi's",
-    "fast_selftest": "fast path built, checking its actions against stock openpi's",
-    "fast_failed": "the fast path failed its check: starting openpi's own policy instead",
-    "fallback": "the fast path failed its check: starting openpi's own policy instead",
+    "fast_built": "fast path built, checking its actions against the stock path's",
+    "fast_selftest": "fast path built, checking its actions against the stock path's",
+    "fast_failed": "the fast path failed its check: starting the stock path instead",
+    "fallback": "the fast path failed its check: starting the stock path instead",
+    "model_loaded": "checkpoint loaded",
+    # model families (families/<family>/serve.py)
+    "cpu": "loading the model",
+    "stock_loaded": "model loaded; building the fast path (the first start on a GPU type compiles for a few minutes)",
+    "service_built": "model loaded, building the fast path or warming up",
+    "serving_setup": "model loaded, warming up",
+    "fast_pixels": "fast path built, checking its actions against the stock path's",
+    "model_path": "checkpoint loaded; compiling the fast path (about 10 to 30 s) or warming up",
     "first_infer_done": "warmup done, opening the websocket server",
     "steady_infer": "warmup done, opening the websocket server",
     "ready": "server ready, waiting for the gateway",
@@ -195,10 +213,19 @@ def newest(items: list[dict]) -> dict | None:
     return max(items, key=lambda x: x.get("createdAt") or "", default=None)
 
 
-def cuda_floor(image: str) -> str | None:
-    """'runpod/pytorch:1.5.0-cu1281-...' -> '12.8': hosts must run at least the image's CUDA."""
+def cuda_floor(image: str, need: str = "") -> str | None:
+    """'runpod/pytorch:1.5.0-cu1281-...' -> '12.8': hosts must run at least the image's CUDA, or `need` (a family's
+    min_cuda, such as '13.0' for CUDA 13 wheels) where that is higher."""
     m = re.search(r"-cu(\d\d)(\d)", image)
-    return f"{m[1]}.{m[2]}" if m else None
+    floor = f"{m[1]}.{m[2]}" if m else None
+    if need and (floor is None or tuple(map(int, need.split("."))) > tuple(map(int, floor.split(".")))):
+        return need
+    return floor
+
+
+def spec_cuda(spec) -> str | None:
+    """The host CUDA floor of a model: its image's, or its family's min_cuda where that is higher."""
+    return cuda_floor(spec.image, getattr(spec, "min_cuda", ""))
 
 
 def pool_types(gpus: list[dict], pool: str, min_ram_gb: float) -> tuple[list[dict], list[str]]:
@@ -264,12 +291,13 @@ def ws_url(ep: dict) -> str:
     return re.sub(r"^http", "ws", base_url(ep)) + "/ws"
 
 
-def snippet(model: str, robot: str = "") -> str:
-    if robot == "libero":  # pgs demo and example_obs know LIBERO's observation
+def snippet(model: str, robot: str = "", family: str = "openpi") -> str:
+    if robot == "libero" and family == "openpi":  # example_obs is openpi's LIBERO observation
         return (f'from playground_serve import connect, example_obs\npolicy = connect("{model}")\n'
                 'print(policy.act(example_obs()).shape)')
+    takes = "as the openpi config takes it" if family == "openpi" else "with the keys MODELS.md lists for it"
     return (f'from playground_serve import connect\npolicy = connect("{model}")\n'
-            "actions = policy.act(obs)  # obs: your robot's observation, as the openpi config takes it")
+            f"actions = policy.act(obs)  # obs: your robot's observation, {takes}")
 
 
 def stops(w: dict) -> str:
@@ -283,6 +311,39 @@ def no_credit(e: Exception) -> bool:
     """A refusal for lack of account credit. Runpod's wording was not seen live; these words ("balance", not the
     "balancer" of a load balancer) are a guess."""
     return re.search(r"\b(balance|credits?|funds)\b", str(e).lower()) is not None
+
+
+def hf_token_file() -> str:
+    """The Hugging Face token `hf auth login` saved on this machine, or "" (HF_TOKEN_PATH, $HF_HOME/token,
+    ~/.cache/huggingface/token)."""
+    import os
+    import pathlib
+
+    home = os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+    path = pathlib.Path(os.environ.get("HF_TOKEN_PATH") or os.path.join(home, "token"))
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return ""
+
+
+def secret_env(spec) -> dict:
+    """The values of the model's secrets (spec.secrets), from this machine: the environment variable of that name, and
+    for HF_TOKEN also the token file `hf auth login` writes. They go only into the endpoint's env on the user's Runpod
+    account; never into the state file, and pgs never prints them."""
+    import os
+
+    out = {}
+    for name in getattr(spec, "secrets", ()) or ():
+        value = os.environ.get(name, "").strip() or (hf_token_file() if name == "HF_TOKEN" else "")
+        if not value:
+            raise LauncherError(
+                f"{spec.name} needs the secret {name}, and this machine has none: set the environment variable {name}"
+                + (" or log in with `hf auth login` (it saves ~/.cache/huggingface/token); the Hugging Face account "
+                   "must have accepted the terms of the gated repos the model loads (MODELS.md)" if name == "HF_TOKEN"
+                   else "") + ". pgs puts it only into this endpoint's settings on your Runpod account.")
+        out[name] = value
+    return out
 
 
 def advice(e: Exception) -> str:
@@ -307,6 +368,20 @@ def advice(e: Exception) -> str:
     return ""
 
 
+def ask(question: str) -> bool:
+    """A yes (y or yes) on the terminal; closed input (Ctrl-D) is a no. Without a terminal there is no one to ask:
+    LauncherError, so a script stops with a sentence instead of a traceback."""
+    import sys
+
+    if not sys.stdin.isatty():
+        raise LauncherError(f"{question.split('?')[0]}? pgs asks before it deletes, and this is not a terminal: run it "
+                            "in one, or pass --yes to delete without asking. Nothing deleted.")
+    try:
+        return input(question).strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
+
+
 class Launcher:
     def __init__(self, api, state_path, *, get_spec=None, make_env=None, start_command=None, model_names=None,
                  out=print, confirm=None, sleep=time.sleep, clock=time.monotonic, poll: float = 5.0,
@@ -318,7 +393,7 @@ class Launcher:
         self.get_spec, self.make_env, self.model_names = get_spec, make_env, model_names
         self.start_command = start_command  # argv such as ["bash", "-c", script]; default bundle.START_COMMAND
         self.out, self.sleep, self.clock, self.poll = out, sleep, clock, poll
-        self.confirm = confirm or (lambda q: input(q).strip().lower() in ("y", "yes"))
+        self.confirm = confirm or ask
         self.measure, self.now = measure, now  # region probe: round trip of one probe endpoint; wall clock for its cache
         self.here = here  # () -> (lat, lon) of this machine's time zone or None: the guess before any probe
 
@@ -375,8 +450,8 @@ class Launcher:
 
     def _gpu(self, spec, c: Candidate) -> dict:
         gpu = {"pools": [c.pool], "count": 1}
-        if cuda_floor(spec.image):
-            gpu["minCudaVersion"] = cuda_floor(spec.image)
+        if spec_cuda(spec):
+            gpu["minCudaVersion"] = spec_cuda(spec)
         if c.excluded:
             gpu["excludedTypes"] = c.excluded
         return gpu
@@ -516,13 +591,15 @@ class Launcher:
         if gpu:
             spec = dataclasses.replace(spec, gpu_pools=[gpu])
         model = spec.name
+        if getattr(spec, "experimental", False):
+            self.out(f"{model}: experimental: slow or not fully verified, see MODELS.md")
         want = workers(warm, idle_min)
-        env = self._env(spec)
+        env = {**self._env(spec), **secret_env(spec)}
         if stock_path and "RS_FAST" in env:
             env = {**env, "RS_FAST": "off"}
         with concurrent.futures.ThreadPoolExecutor(4) as ex:  # four independent reads, about 1.7 s one after another
             reads = [ex.submit(f) for f in (self.api.list_endpoints, self.api.list_volumes,
-                                            lambda: self.api.serverless_gpus(cuda_floor(spec.image)),
+                                            lambda: self.api.serverless_gpus(spec_cuda(spec)),
                                             self.api.datacenters)]
             endpoints, volumes, gpus, dcs = (r.result() for r in reads)
         ep, vol, (their_eps, their_vols) = self.reconcile(model, endpoints, volumes)
@@ -530,6 +607,7 @@ class Launcher:
             env = {**env, DIRECT_KEY: str(DIRECT_PORT)}
         env = {**env, RELEASE_KEY: release_id(env)}
         release = env[RELEASE_KEY]  # the worker (worker/serve.py) sends it in its metadata
+        self._check_size(model, spec, env, gpus, dcs, want)  # before anything is created or changed
         kept = ((ep or {}).get("gpu") or {}).get("pools") or []
         if not gpu and kept and kept[0] not in spec.gpu_pools:  # an endpoint made with --gpu keeps its pool
             spec = dataclasses.replace(spec, gpu_pools=[kept[0], *spec.gpu_pools])
@@ -551,8 +629,9 @@ class Launcher:
         else:
             ep, price = self._bring_up(spec, env, ep, gpus, dcs, want)
         first = not self._rec(model).get("volume", {}).get("ready")
+        family = getattr(spec, "family", "openpi")
         if first:
-            self.out(FIRST_BOOT_NOTE)
+            self.out(FIRST_BOOT_NOTE if family == "openpi" else FAMILY_FIRST_BOOT_NOTE)
         try:
             self._wait_ready(ep, FIRST_BOOT_TIMEOUT_S if first else BOOT_TIMEOUT_S, t0, want, release)
         except KeyboardInterrupt:
@@ -591,9 +670,15 @@ class Launcher:
         from . import state
 
         robot = getattr(spec, "robot", "")
+        if family == "openpi":
+            demo = robot == "libero"  # demo.example_obs is openpi's LIBERO observation
+        else:
+            from . import models
+
+            demo = models.example_observation(model) is not None  # the family's spec.py has an example
         self.out("\nNext: " + (f"`pgs demo {model}` sends a dummy observation and prints the actions' shape and the "
-                               "round trip. Or in Python" if robot == "libero" else "in Python")
-                 + f" (the key comes from RUNPOD_API_KEY or {state.key_path()}):\n" + snippet(model, robot)
+                               "round trip. Or in Python" if demo else "in Python")
+                 + f" (the key comes from RUNPOD_API_KEY or {state.key_path()}):\n" + snippet(model, robot, family)
                  + "\nWhen done: `pgs down`. " + ("Until then 1 worker keeps running and billing (--warm)."
                                                   if want["min"] >= 1 else "Without it the worker stops by itself "
                                                   f"{idle_text(want['idleTimeout'])} after the last request."))
@@ -658,12 +743,15 @@ class Launcher:
             self._drop_volume(model, made, "no candidate accepted the endpoint")
         raise LauncherError("Runpod refused every candidate (see above). Try again later.")
 
+    def _endpoint_body(self, name: str, spec, env: dict, gpu: dict, dc: str, volume_id: str, want: dict) -> dict:
+        return {"name": name, "type": "LOAD_BALANCER", **self._container(spec, env), "gpu": gpu, "dataCenterIds": [dc],
+                "mounts": {"network": [{"volumeId": volume_id}]}, "workers": dict(want), "scaling": dict(SCALING),
+                "flashboot": FLASHBOOT, "timeout": TIMEOUT_MS}
+
     def _create_endpoint(self, model, owner, spec, env, vol, c: Candidate, want) -> dict:
         last = ""
         for _ in range(4):
-            body = {"name": make_name(model, owner), "type": "LOAD_BALANCER", **self._container(spec, env),
-                    "gpu": self._gpu(spec, c), "dataCenterIds": [c.dc], "mounts": {"network": [{"volumeId": vol["id"]}]},
-                    "workers": dict(want), "scaling": dict(SCALING), "flashboot": FLASHBOOT, "timeout": TIMEOUT_MS}
+            body = self._endpoint_body(make_name(model, owner), spec, env, self._gpu(spec, c), c.dc, vol["id"], want)
             try:
                 return self._create_one(self.api.create_endpoint, body, self.api.list_endpoints)
             except Refused as e:
@@ -678,6 +766,28 @@ class Launcher:
         if "quota" in last.lower():  # no other candidate can help
             raise LauncherError(f"Runpod refused the endpoint: {last}. {advice(Refused(last))}")
         raise Refused("endpoint create kept failing (name collisions)")
+
+    def _largest_request(self, model: str, spec, env: dict, gpus: list[dict], dcs: list[dict], want: dict) -> int:
+        """Bytes of the largest request `up` may send for this env: an endpoint create (an update sends a part of it),
+        with its variable parts at their longest: the longest data center id, every GPU type of the model's pools that
+        it may exclude, a long volume id."""
+        excluded = sorted({i for p in spec.gpu_pools for i in pool_types(gpus, p, spec.min_container_ram_gb)[1]})
+        gpu = {"pools": [max(spec.gpu_pools, key=len)], "count": 1, "minCudaVersion": spec_cuda(spec) or "",
+               "excludedTypes": excluded}
+        dc = max([d.get("id") or "" for d in dcs], key=len, default="")
+        name = make_name(model, self.owner or new_owner())
+        return len(encode(self._endpoint_body(name, spec, env, gpu, dc, "v" * 32, want)))
+
+    def _check_size(self, model: str, spec, env: dict, gpus: list[dict], dcs: list[dict], want: dict) -> None:
+        size = self._largest_request(model, spec, env, gpus, dcs, want)
+        if size > MAX_REQUEST_BYTES:
+            family = getattr(spec, "family", "openpi")
+            raise LauncherError(
+                f"{model}: the endpoint request would be {size:,} bytes, over the {MAX_REQUEST_BYTES:,} that Runpod "
+                f"accepts (it answers HTTP 413); the worker files (RS_FILES) are {len(env.get('RS_FILES', '')):,} "
+                f"bytes of it. Nothing was created. This is a size limit of this version of Playground Serve for "
+                f"{model}, not of your account: please report it at {ISSUES}"
+                + ("" if family == "openpi" else f" (the files of families/{family}/ are too large)") + ".")
 
     def _order(self, cands: list[Candidate], endpoints: list[dict], owner: str):
         """(cands, data centers to probe, how the first was chosen). Within each pool: data centers measured in the
@@ -913,14 +1023,23 @@ class Launcher:
             phase = phase or shown or "container running, waiting for the server's first log line"
             if elapsed > timeout:
                 self._update(ep, {"workers": dict(DOWN)})
-                raise LauncherError(f"Not ready after {fmt_elapsed(elapsed)} (last phase: {phase}). Scaled the "
-                                    f"endpoint to zero to stop billing. Worker logs: "
+                raise LauncherError(f"Not ready after {fmt_elapsed(elapsed)}, the limit of `pgs up` for this start "
+                                    f"(last phase: {phase}). Scaled the endpoint to zero to stop billing. A slow host "
+                                    f"or volume is the usual cause: `pgs up {self._model_of(ep)}` starts a new worker "
+                                    "(often on another host). Worker logs: "
                                     f"https://console.runpod.io/serverless/user/endpoint/{ep['id']}")
             if phase != shown or self.clock() - shown_at >= 60:
                 self.out(f"  [{fmt_elapsed(elapsed)}] {phase}")
                 shown, shown_at = phase, self.clock()
             if not use_gateway:
                 self.sleep(self.poll)
+
+    def _model_of(self, ep: dict) -> str:
+        """The model name this state file records for an endpoint (its slug from the name if not recorded)."""
+        for model, rec in self.data["models"].items():
+            if (rec.get("endpoint") or {}).get("id") == ep.get("id"):
+                return model
+        return (parse_name(ep.get("name")) or (None, "MODEL"))[1]
 
     def _wait_fill(self, ep: dict) -> None:
         """A first start saves the environment and checkpoint to the volume after the server is ready (worker
@@ -1028,8 +1147,9 @@ class Launcher:
                 self.out(f"  not yours: volume {v['name']} ({v['id']}), {self._whose(v)}")
         self.out(f"Total now for yours: about {total:.3f} USD/hr")
 
-    def delete(self, model: str, volume: bool = False, force: bool = False) -> None:
-        """Deletes yours; another owner's endpoint (and with --volume its volume) only with `force`."""
+    def delete(self, model: str, volume: bool = False, force: bool = False, yes: bool = False) -> None:
+        """Deletes yours; another owner's endpoint (and with --volume its volume) only with `force`; asks first unless
+        `yes`."""
         model = self._key(model)
         endpoints, volumes = self.api.list_endpoints(), self.api.list_volumes()
         ep, vol, (their_eps, their_vols) = self.reconcile(model, endpoints, volumes)
@@ -1059,7 +1179,7 @@ class Launcher:
             return
         if refused:
             self.out(f"Not yours, not deleted: {refused}.")
-        if not self.confirm(f"Delete {' and '.join(what)}? This cannot be undone. [y/N] "):
+        if not yes and not self.confirm(f"Delete {' and '.join(what)}? This cannot be undone. [y/N] "):
             self.out("Nothing deleted.")
             return
         rec = self.data["models"].get(model, {})

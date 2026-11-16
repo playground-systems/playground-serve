@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import time
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,14 @@ def observations() -> list[dict]:
     d = np.load(FRAMES)
     return [{"observation/image": d["image"][i], "observation/wrist_image": d["wrist_image"][i],
              "observation/state": d["state"][i], "prompt": str(d["prompt"])} for i in range(len(d["image"]))]
+
+
+def wait_for(condition, timeout: float = 30.0) -> bool:
+    """Poll `condition` until it holds or `timeout` (generous: a loaded machine runs threads late) runs out."""
+    deadline = time.monotonic() + timeout
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return condition()
 
 
 def free_port() -> int:

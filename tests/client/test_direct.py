@@ -6,7 +6,9 @@ import socket
 import time
 
 import pytest
+from conftest import wait_for
 
+from playground_serve.client import client as client_module
 from playground_serve.client import connect
 from playground_serve.client.mock_server import Config, MockServer
 from playground_serve.worker import direct
@@ -46,13 +48,19 @@ def test_a_direct_port_that_cannot_be_trusted_or_reached_leaves_the_gateway(obse
             assert client.timing["path"] == "gateway" and cfg.direct_requests == 0 and cfg.aux_frames == 1
 
 
-def test_a_direct_port_that_never_answers_costs_one_open_timeout(observations, caplog):
+def test_a_direct_port_that_never_answers_costs_one_open_timeout(observations, caplog, monkeypatch):
+    opens = []  # (url, open_timeout) of each socket the client opens
+    real_open = client_module.Policy._open
+    monkeypatch.setattr(client_module.Policy, "_open", lambda self, url=None, aux=False, **o: opens.append(
+        (url, o.get("open_timeout", self.open_timeout))) or real_open(self, url, aux, **o))
     cfg = Config(direct=True)
     with MockServer(cfg) as mock, socket.create_server(("127.0.0.1", 0)) as silent:  # takes the TCP connect, no TLS
         cfg.direct_info["port"] = silent.getsockname()[1]
         t = time.monotonic()
         with connect(mock.url, open_timeout=1) as client:
-            assert time.monotonic() - t < 3 and client._direct is None and "no direct connection" in caplog.text
+            assert time.monotonic() - t >= 0.9  # it waited for the TLS answer until the open timeout cut it
+            assert [o for o in opens if o[0]] == [(f"wss://127.0.0.1:{silent.getsockname()[1]}/ws", 1)]  # once
+            assert client._direct is None and "no direct connection" in caplog.text
             assert client.infer(observations[0])["actions"].shape == (10, 7)
             assert client.timing["path"] == "gateway" and cfg.direct_requests == 0
 
@@ -74,8 +82,8 @@ def test_keepalive_uses_both_connections(observations):
     cfg = Config(direct=True)
     with MockServer(cfg) as mock:
         client = connect(mock.url, keepalive=0.1)
-        time.sleep(0.45)
-        assert client.noops >= 2 and cfg.noops >= 2 * client.noops - 1 and client._direct is not None
+        assert wait_for(lambda: client.noops >= 2)
+        assert cfg.noops >= 2 * client.noops - 1 and client._direct is not None
         client.infer(observations[0])
         assert client.timing["path"] == "direct"
         client.close()

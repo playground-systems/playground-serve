@@ -29,7 +29,7 @@ def test_without_a_key(no_key, capsys):
     out = capsys.readouterr().out
     table = rows(out)
     assert set(table) == set(models.names())
-    assert "ran on GPU 2026-11-13" in table["pi05_libero"] and "untested" in table["pi05_droid"]
+    assert "ran on GPU 2026-11-13" in table["pi05_libero"] and "untested" in table["pi0_droid"]
     assert "RTX 4090 (ADA_24)" in table["pi05_droid"] and "1.34" in table["pi05_droid"]
     assert "Gemma" in table["pi05_libero"]
     assert "list prices read 2026-11-13" in out
