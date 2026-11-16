@@ -11,6 +11,10 @@ Modes, applied to every HxWx3 uint8 array in the observation (nested dicts inclu
           openpi_client.image_tools.
   jpeg    resize, then JPEG at `quality`; each image becomes {b"__jpeg__": True, b"data": <bytes>}, which the server
           turns back into an array with server_decode.decode_images.
+size None keeps every image at its own size (the server's metadata "image_size": "native"): resize then sends it
+unchanged and jpeg only encodes it, for models whose own preprocessing resizes the camera frame.
+With stacks=True (servers whose features say "jpeg_stack": true) lists are walked as well, and a (T, H, W, 3) uint8
+stack of frames is resized frame by frame; in jpeg mode it becomes {b"__jpeg_stack__": True, b"frames": [<bytes>...]}.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from PIL import Image
 
 MODES = ("raw", "resize", "jpeg")
 JPEG_KEY = b"__jpeg__"
+JPEG_STACK_KEY = b"__jpeg_stack__"
 
 
 def pack_array(obj):
@@ -75,17 +80,27 @@ def encode_jpeg(image: np.ndarray, quality: int) -> bytes:
     return buf.getvalue()
 
 
-def encode_images(obs, mode: str, size=224, quality: int = 90):
-    """Return a copy of `obs` with its images transformed for `mode`; other values are unchanged. `size` is an int or
-    (H, W)."""
+def is_stack(value) -> bool:
+    return isinstance(value, np.ndarray) and value.dtype == np.uint8 and value.ndim == 4 and value.shape[-1] == 3
+
+
+def encode_images(obs, mode: str, size=224, quality: int = 90, stacks: bool = False):
+    """Return a copy of `obs` with its images transformed for `mode`; other values are unchanged. `size` is an int,
+    (H, W), or None to keep each image's own size. `stacks`: also lists and (T, H, W, 3) frame stacks."""
     if mode == "raw":
         return obs
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
     if isinstance(obs, dict):
-        return {k: encode_images(v, mode, size, quality) for k, v in obs.items()}
+        return {k: encode_images(v, mode, size, quality, stacks) for k, v in obs.items()}
+    if stacks and isinstance(obs, (list, tuple)):
+        return [encode_images(v, mode, size, quality, stacks) for v in obs]
+    if stacks and is_stack(obs):
+        frames = [encode_images(frame, mode, size, quality) for frame in obs]
+        return ({JPEG_STACK_KEY: True, b"frames": [f[b"data"] for f in frames]} if mode == "jpeg"
+                else np.stack(frames))
     if not is_image(obs):
         return obs
-    height, width = (size, size) if isinstance(size, int) else size
+    height, width = obs.shape[:2] if size is None else (size, size) if isinstance(size, int) else size
     image = resize_with_pad(obs, height, width)
     return {JPEG_KEY: True, b"data": encode_jpeg(image, quality)} if mode == "jpeg" else image

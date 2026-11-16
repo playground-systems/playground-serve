@@ -34,8 +34,8 @@ Every frame is binary msgpack-numpy, except a server error: a text frame with th
 2. Client: one request, the observation map. Field names are the model's, as in openpi's example for its config;
    LIBERO: `observation/image` and `observation/wrist_image` (uint8 H x W x 3), `observation/state` (float), `prompt`.
 3. Server: one reply map: `actions`, an array (horizon, action_dim), for example (10, 7); `server_timing`, a map with
-   `infer_ms` (the policy call, JPEG decode included) and, from the second reply on a socket, `prev_total_ms` (the
-   previous request's total server time); other keys the policy adds (openpi's `policy_timing`).
+   `infer_ms` (the policy call, JPEG decode included; a model family's worker adds `decode_ms`, the decode alone) and
+   from the second reply on a socket `prev_total_ms`; optional `policy_timing`, `*_ms` stages inside the policy call.
 4. Repeat 2 and 3. One request in flight per socket: send the next request, no-op included, only after the reply to the previous one. For parallel requests open more sockets (scaling requestCount 4, as `pgs up` sets it, admitted three sockets at once on one worker).
 5. Split requests, only when the features say `"split": true` and the mode is `jpeg`: open a second socket to the same URL with the query `rs_aux=<session id>` (`SPLIT_PATH`; any random string per connection; the server sends nothing on it, not even metadata). Send every second image map, largest first, as one frame on it and the rest of the observation as the request frame, both with the extra key `SPLIT_KEY`: [session id, request number]. The server merges the two maps (it waits up to 5 s for the second frame, then answers with an error). Each frame of a LIBERO request is then under 11 kB and fits the first flight of a TCP connection that was idle; a 19.7 kB frame sent 0.2 s or more after the previous one took one more round trip of the path through Runpod's gateway (about 70 ms to US-CA-2). If the second socket fails, send whole requests on the first.
 
@@ -50,7 +50,7 @@ each map that has the bin key `__ndarray__` back into an array; replies use the 
 
 ## Features in the metadata
 
-A Playground Serve worker adds `"playground_serve": {"jpeg": true, "noop": true}` to the metadata (the old wire key
+A Playground Serve worker (openpi's or another family's) adds `"playground_serve": {"jpeg": true, "noop": true}` to the metadata (the old wire key
 `"robo_serve"` is still accepted for compatibility); use the first key of `FEATURE_KEYS` whose value is a map. A stock openpi server sends neither: no jpeg
 mode, no no-op. Read them again after every reconnect. For logs: `"path"` (fast, stock), `"path_reason"`, `"release"`.
 
@@ -58,15 +58,16 @@ mode, no no-op. Read them again after every reconnect. For logs: `"path"` (fast,
 
 Each uint8 array of shape (H, W, 3), at any depth, goes in one of `MODES`: the metadata's `"image_mode"` if it names
 one (`jpeg` only if advertised), else `jpeg` if advertised, else `resize`. Target size H' x W': the metadata's
-`"image_size"` ([H', W'] or one int), else `IMAGE_SIZE` square.
+`"image_size"` ([H', W'] or one int; `"native"`: each image's own size, so `resize` changes nothing and `jpeg` only
+encodes), else `IMAGE_SIZE` square.
 
 - `raw`: unchanged; the bytes equal openpi-client's.
 - `resize`: openpi's `image_tools.resize_with_pad` to H' x W'. Unless already that size: r = max(W / W', H / H'); PIL
   bilinear resize to w = int(W / r) by h = int(H / r); paste on black at (int((W' - w) / 2), int((H' - h) / 2)).
-- `jpeg`: resize as above, encode JPEG with PIL at quality `JPEG_QUALITY` (PIL defaults otherwise: baseline, 4:2:0),
-  and send the map `{b"__jpeg__": True, b"data": <bin: the JPEG bytes>}` (bin key `JPEG_KEY`) in place of the array.
-  The worker decodes it to RGB uint8 before the policy; any other image format is an error. A LIBERO request is then
-  about 19 kB instead of 300 to 400 kB.
+- `jpeg`: resize as above, encode JPEG with PIL at quality `JPEG_QUALITY` (PIL defaults otherwise: baseline, 4:2:0) and
+  send `{b"__jpeg__": True, b"data": <bin: JPEG bytes>}` (bin key `JPEG_KEY`) in place of the array; the worker decodes
+  it (JPEG only) to RGB uint8 (a LIBERO request: about 19 kB, not 300 to 400 kB). With `"jpeg_stack": true` in the
+  features, a (T, H, W, 3) stack goes as `{b"__jpeg_stack__": True, b"frames": [<bin>, ...]}`, and lists are walked.
 
 ## Keep-alive and liveness
 

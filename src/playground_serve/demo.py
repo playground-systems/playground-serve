@@ -26,19 +26,21 @@ def example_obs(seed: int = 0) -> dict:
     }
 
 
-def run(target: str, key: str | None, out=print, connect=None) -> None:
-    """Connect to `target` (a model name or ws/wss URL, as `connect` takes it), send example_obs once to wake the
-    worker and CALLS more times, and print the actions' shape and the round trip."""
+def run(target: str, key: str | None, out=print, connect=None, make_obs=None) -> None:
+    """Connect to `target` (a model name or ws/wss URL, as `connect` takes it), send an example observation
+    (make_obs(seed), default example_obs) once to wake the worker and CALLS more times, and print the actions' shape
+    and the round trip."""
     if connect is None:
         from .resolve import connect
+    make_obs = make_obs or example_obs
     out(f"Connecting to {target} (if no worker runs, one starts now: about 1 minute)...")
     t0 = time.monotonic()
     with connect(target, api_key=key) as policy:
-        actions = policy.act(example_obs())
+        actions = policy.act(make_obs(0))
         first_s = time.monotonic() - t0
         rtt, infer = [], []
         for seed in range(1, CALLS + 1):
-            policy.act(example_obs(seed))
+            policy.act(make_obs(seed))
             rtt.append(policy.timing["rtt_ms"])
             if policy.timing.get("infer_ms") is not None:
                 infer.append(policy.timing["infer_ms"])

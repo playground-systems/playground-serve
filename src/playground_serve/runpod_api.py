@@ -28,6 +28,11 @@ class ApiError(Exception):
         super().__init__(text + ("" if not self.errors else " (" + "; ".join(self.errors) + ")"))
 
 
+def encode(body) -> bytes:
+    """A request body as this client sends it (Runpod's size limit counts these bytes: launcher.MAX_REQUEST_BYTES)."""
+    return json.dumps(body).encode()
+
+
 def _error(status: int, method: str, path: str, raw: bytes) -> ApiError:
     try:
         body = json.loads(raw)
@@ -50,7 +55,7 @@ class RunpodApi:
         headers = {"Authorization": f"Bearer {self._key}", "User-Agent": USER_AGENT, "Accept": accept}
         data = None
         if body is not None:
-            data, headers["Content-Type"] = json.dumps(body).encode(), "application/json"
+            data, headers["Content-Type"] = encode(body), "application/json"
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         return urllib.request.urlopen(req, timeout=timeout or self.timeout)
 

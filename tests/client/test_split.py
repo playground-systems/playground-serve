@@ -1,7 +1,7 @@
 """Split requests: with a server that advertises `split`, a jpeg request goes as two frames on two sockets and the
 server sees one whole observation; without it, or once the second socket is gone, it goes whole on one."""
 
-import time
+from conftest import wait_for
 
 from playground_serve.client import client as client_mod
 from playground_serve.client import connect
@@ -55,8 +55,7 @@ def test_keepalive_uses_both_sockets_and_close_closes_both(observations):
     with MockServer(cfg) as mock:
         client = connect(mock.url, keepalive=0.1)
         aux = client._aux
-        time.sleep(0.45)
-        assert client.noops >= 2
+        assert wait_for(lambda: client.noops >= 2)
         client.infer(observations[0])
         client.close()
         assert client._aux is None and aux.protocol.state.name in ("CLOSING", "CLOSED")

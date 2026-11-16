@@ -266,7 +266,7 @@ def test_stage_is_standard_library_only():
     """It runs on the base image's python3 before the openpi environment exists."""
     source = pathlib.Path(stage.__file__).read_text()
     imported = {line.split()[1].split(".")[0] for line in source.splitlines() if line.startswith(("import ", "from "))}
-    assert imported <= {"__future__", "concurrent", "json", "os", "pathlib", "shutil", "socket", "subprocess", "sys",
+    assert imported <= {"__future__", "concurrent", "fnmatch", "json", "os", "pathlib", "shutil", "socket", "subprocess", "sys",
                         "threading", "time", "urllib"}
     env = {"PATH": os.environ["PATH"]}
     r = subprocess.run(["python3", "-I", stage.__file__], env=env, capture_output=True, text=True)
