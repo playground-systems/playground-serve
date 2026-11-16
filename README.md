@@ -1,244 +1,201 @@
 # Playground Serve
 
-Playground Serve runs an openpi robot policy (π0.5) on a serverless GPU in your own Runpod account. One command
-starts it, and three lines of Python on your robot or simulator get actions from it.
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![Python: pgs 3.10+, client 3.8+](https://img.shields.io/badge/python-3.10%2B%20%7C%20client%203.8%2B-blue)](pyproject.toml)
+[![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](#status)
 
-## Quick start
+**Low-cost, open source inference for robot policies (VLAs). One command serves π0.5, MolmoAct2, GR00T and more from
+a serverless GPU in your own cloud account.** `pgs up pi05_libero` starts the GPU, serves the vision-language-action
+model over a websocket, and scales to zero when your robot stops calling it.
 
-You need a [Runpod](https://www.runpod.io) account with credit and Python 3.10 or later.
+<p align="center">
+  <a href="#quickstart">Quickstart</a> ·
+  <a href="#models">Models</a> ·
+  <a href="docs/BENCHMARKS.md">Benchmarks</a> ·
+  <a href="#drive-a-robot">Drive a robot</a>
+</p>
+
+π0.5 on an RTX 4090, measured: ready about a minute after `pgs up` on a fresh account (median 65 s, 60 to 118 s over
+nine first starts), 31 to 34 ms per model call against 75 to 79 ms for stock openpi, 61 ms round trip from the US
+east coast to US-NC-1 (p50), 1.34 USD/hr only while a worker runs.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/model-time-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/model-time-light.svg">
+    <img alt="Bar chart of model time per call, stock against the fast path, on each model's default GPU: MolmoAct2 532.0 to 104.8 ms, Xiaomi-Robotics-1 267.9 to 65.5 ms, ABC-VLA 84.0 to 28.8 ms, Flex-π 318.5 to 131.9 ms, π0.5 75-79 to 31-34 ms, GR00T N1.7 118.4 to 68.5 ms, Cosmos 3 Edge 514.0 to 439.5 ms." src="docs/assets/model-time-light.svg" width="880">
+  </picture>
+</p>
+
+- **One command, no image to build.** `pgs up MODEL` creates the endpoint and a network volume in your account, prints
+  the price before it creates anything, and waits until the model serves. `pgs down` stops the GPU bill.
+- **Eight model families, 23 entries:** openpi π0 and π0.5, MolmoAct2, GR00T N1.7, ABC-VLA, Xiaomi-Robotics-1,
+  Flex-π, Cosmos 3 and FLUX 3 Action.
+- **Faster, and still the same model.** Each fast path keeps the weights, precision, steps and inputs, and must
+  reproduce the stock actions at every start or the worker serves stock: model calls 1.2x to 5.1x faster.
+- **Your account, your choices:** the GPU, the region, a direct port past the gateway, your own checkpoints.
+- **A small client:** four lines of Python 3.8+, openpi's websocket protocol, an action queue for control loops.
+
+## Quickstart
+
+You need a [Runpod](https://www.runpod.io) account with credit and Python 3.10 or later. The first `pgs up` asks for
+a Runpod API key, says where to create it and which permissions to pick, and saves it for later commands.
 
 ```bash
 pip install git+https://github.com/playground-systems/playground-serve
 pgs up pi05_libero   # start the GPU server: about 1 to 2 minutes the first time
-pgs demo             # send one dummy observation, print the actions' shape and the round trip
-pgs down             # stop GPU billing now
+pgs demo             # send a dummy observation, print the actions' shape and the round trip
+pgs down             # keep no worker: GPU billing stops within about a minute
 ```
 
-The first `pgs up` asks for a Runpod API key. It prints the console page where you create one and the permissions to
-pick, reads the key with hidden input, checks it with one read, and saves it for later commands.
+<p align="center">
+  <img alt="Terminal: pgs up pi05_libero creates a volume and an endpoint in US-NC-1 and is ready after 1:44; pgs demo returns actions of shape (10, 7) with a 91 ms median round trip; pgs down keeps no worker. Real output, trimmed." src="docs/assets/quickstart.svg" width="872">
+</p>
 
-What you see (shortened; your data center, times and prices will differ):
+Real output of one session on 2026-11-16, trimmed: a first start on a new volume in US-NC-1 (the checkpoint download
+and the fast path's conversion included), then `pgs demo` and `pgs down` from the US east coast.
 
-```text
-$ pgs up pi05_libero
-GPU:    RTX 4090 (pool ADA_24) in US-NC-1, serverless stock HIGH: 1.34 USD/hr while a worker runs; the worker stops by itself 5 min after the last request (scale to zero)
-Volume: 40 GB STANDARD in US-NC-1: about 2.80 USD/month until deleted
-...
-Ready after 1:05.
-Websocket: wss://<endpoint-id>.api.runpod.ai/ws
-
-$ pgs demo
-Actions: shape (10, 7) (horizon x action size; the observation was random, so the values mean nothing).
-Round trip over 5 more calls: median 65 ms, max 75 ms; model time on the server median 33 ms.
-
-$ pgs down
-pi05_libero: no worker kept ... a running worker stops within about a minute once no client is connected, and GPU billing stops then.
-```
-
-Cost of this quick start: a few minutes of RTX 4090 time at 1.34 USD/hr, about 0.10 to 0.20 USD (estimate), plus
-the 40 GB volume at about 2.80 USD/month until you delete it with `pgs delete pi05_libero --volume`.
-
-No install: put `uvx --python 3.12 --from git+https://github.com/playground-systems/playground-serve` in front of
-each command, for example:
-
-```bash
-uvx --python 3.12 --from git+https://github.com/playground-systems/playground-serve pgs up pi05_libero
-```
-
-## Use it from Python
+On your robot or simulator:
 
 ```python
 from playground_serve import connect, example_obs
-policy = connect("pi05_libero")
-print(policy.act(example_obs()).shape)   # (10, 7)
+
+policy = connect("pi05_libero")       # finds the endpoint that `pgs up` made
+actions = policy.act(example_obs())   # pass your robot's observation here
+print(actions.shape)                  # (10, 7): 10 steps of 7 action values
 ```
 
-Replace `example_obs()` with your robot's observation. For `pi05_libero` it is the layout of openpi's LIBERO example:
-`observation/image` and `observation/wrist_image` (uint8, height x width x 3), `observation/state` (8 floats) and
-`prompt` (a string). `policy.act(obs)` returns the action chunk as a numpy array; `policy.infer(obs)` returns openpi's
-whole reply. `connect` finds the endpoint in the state file that `pgs up` wrote, or on your Runpod account. It also
-takes the `wss://` URL that `pgs up` printed.
+**What a first try costs:** a few minutes of RTX 4090 time at 1.34 USD/hr, about 0.10 to 0.20 USD (estimate), plus
+the 40 GB volume that keeps the environment and checkpoint for faster restarts, about 2.80 USD/month until
+`pgs delete pi05_libero --volume`. These are Runpod list prices read 2026-11-13; `pgs up` prints the live ones.
 
-- `ActionQueue` keeps a control loop fed while requests are in flight.
-- `playground_serve.status("pi05_libero").state` says `warm`, `cold` or `missing` without starting a worker.
-- The client runs on Python 3.8 or later. `pgs` needs Python 3.10 or later.
-- Wire format, for clients in other languages: [docs/WIRE.md](docs/WIRE.md).
+If this is useful to you, a star helps other robotics people find it.
 
-## Requirements
+## Status
 
-- A Runpod account with credit. A first test costs well under 1 USD; see [Costs](#costs-and-when-it-bills).
-- A Runpod API key. Create it at https://console.runpod.io/user/credentials (API Keys, Create API Key). Permission:
-  All, or Restricted with Read/Write for Serverless and for Network volumes.
-- Python 3.10 or later for `pgs`, and pip or [uv](https://docs.astral.sh/uv/). Installing from GitHub needs git.
+Alpha (0.1.0). What is true today:
 
-## Install
-
-```bash
-pip install git+https://github.com/playground-systems/playground-serve      # pip
-uv tool install --python 3.12 git+https://github.com/playground-systems/playground-serve   # or as a uv tool
-```
-
-Both install the commands `pgs` and `playground-serve` (the same program).
-
-## The API key
-
-`pgs` and `connect()` read the key from, in order:
-
-1. `--key-file PATH` (or `connect(api_key=...)`, `connect(key_file=...)`),
-2. the `RUNPOD_API_KEY` environment variable,
-3. the file `~/.config/playground-serve/key` (`$XDG_CONFIG_HOME/playground-serve/key` if that is set).
-
-If none is set and `pgs` runs in a terminal, it asks for the key once and saves it to that file, readable only by you.
-Outside a terminal (scripts, CI) it prints what to do and exits. To replace a saved key, delete the file or set
-`RUNPOD_API_KEY`. The key is sent only to Runpod, in the Authorization header, and `pgs` never prints it.
-
-A robot needs only a key that can call its endpoint. In the Runpod console, create a Restricted key with Read/Write on
-the `playground-serve-<owner>-<model>-<hex>` endpoint and nothing else. Such a key cannot list endpoints, so pass the
-URL that `pgs up` printed to `connect()` or set `PLAYGROUND_SERVE_URL`.
-
-## Commands
-
-| Command | What it does |
-|---|---|
-| `pgs up MODEL` | Finds or creates a network volume and a serverless endpoint for the model, starts a worker, and waits until it serves. Prints the GPU, the price and when billing stops before it creates anything. |
-| `pgs demo [MODEL]` | Sends a dummy LIBERO observation (default `pi05_libero`) and prints the actions' shape and the round trip. Starts a worker if none runs. |
-| `pgs status` | Your endpoints and volumes, worker state and the price now. Read only. |
-| `pgs down [MODEL]` | Keeps no worker: a running worker stops within about a minute once no client is connected. The volume stays. |
-| `pgs delete MODEL [--volume]` | Deletes the endpoint, and with `--volume` the volume. Asks first. |
-| `pgs models` | Every registered model with its GPU, hourly price and whether it ran on a GPU. Works without a key. |
-
-Options of `pgs up`:
-
-- `--warm` keeps one worker running (and billing) until `pgs down`.
-- `--idle MIN` sets how long a worker stays after its last request or client (default 5 minutes).
-- `--region DC` picks the data center of a new endpoint, for example `US-NC-1`.
-- `--gpu GPU` uses another GPU than the model's default pools, by name or Runpod pool, for example `H200`. It bills
-  that GPU's price (H200 6.99 USD/hr against 1.34 for the RTX 4090, list prices read 2026-11-13), only the RTX 4090
-  and the H200 get the fast path (other GPUs serve stock openpi), and the endpoint keeps that GPU on a later `pgs up`.
-- `--stock-path` serves openpi's own policy instead of the fast path.
-- `--direct` also serves on a TCP port of the worker's own public address; the Python client then sends its requests
-  there instead of through Runpod's gateway (see [Direct port](#direct-port)).
-- `--adopt [ID]` and `--new`: see [Ownership](#ownership).
-
-## Costs and when it bills
-
-`pgs up` prints the live prices before it creates anything. Runpod list prices, read 2026-11-13: RTX 4090 1.34 USD/hr
-and A40 1.22 USD/hr while a worker runs.
-
-- GPU: by default no worker is kept (scale to zero). A worker that a request starts stops by itself 5 minutes after the
-  last request if no client is connected. A connected client keeps it running; it stops 5 minutes after the last
-  client disconnects. The next connect starts a worker again, which takes about 1 minute.
-- `pgs up MODEL --warm` keeps one worker running until `pgs down`: 1.34 USD/hr, about 32 USD per day on an RTX 4090.
-- `pgs down` sets a 5 second idle time: a running worker stops within about a minute once no client is connected.
-- Region probe: when `pgs up` creates a new endpoint, it measures the round trip to nearby data centers while the
-  worker starts. For that it creates one short-lived probe endpoint per data center (a CPU worker where Runpod offers
-  one, else a GPU worker), deletes each one right after its measurement, and caches the result for a day. This costs a
-  few cents at most (estimate).
-- Network volume: 40 GB, about 2.80 USD/month (STANDARD) or 5.60 USD/month (HIGH_PERFORMANCE, where that is the only
-  type), billed until `pgs delete MODEL --volume`. It holds the Python environment, the checkpoint and compile caches,
-  so later starts skip the download. `pgs down` keeps it.
-
-## Measured performance
-
-`pi05_libero` on an RTX 4090 in US-NC-1, client on home Wi-Fi on the US east coast, JPEG quality 90:
-
-- First start, nothing cached: 60 to 118 s over nine runs (median 65 s). It depends on the GPU host's download speed;
-  on a slow host it can take over 2 minutes (estimate).
-- Later start, from the volume: 61 to 89 s over three runs.
-- Round trip: p50 61 ms and p95 69 ms back to back; p50 66 ms and p95 76 ms at 5 requests per second. While the
-  client's Wi-Fi stalled, p95 rose to 113 to 140 ms.
-- Model time on the GPU: 31 to 34 ms on the fast path, 75 to 79 ms with stock openpi; 146 ms with stock openpi on an
-  A40.
-
-Details and conditions: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+- 12 of the 23 model entries have served real actions on a Runpod GPU. The other 11 are registered and untested:
+  `pi0_droid`, `pi0_fast_droid`, the five ALOHA entries, three more GR00T N1.7 suites and Cosmos 3 Nano. `pgs models`
+  says which is which.
+- Experimental (slow or not fully verified): Cosmos 3 Edge and Nano, and FLUX 3 Action (stock path only, 3.2 s per
+  call).
+- Fast paths serve only on the GPUs where they were measured ([MODELS.md](MODELS.md)); on any other GPU the model's
+  stock path serves. Custom checkpoints have not run on a GPU.
+- `pgs` was tested on macOS only. It installs from GitHub; it is not on PyPI yet.
+- `pgs run so101` ([below](#drive-a-robot)) has driven a simulated arm, not yet a real one.
 
 ## Models
 
-| Model | Robot | Status |
-|---|---|---|
-| `pi05_libero` | LIBERO (simulation) | Ran on a real GPU (RTX 4090 and A40). |
-| `pi05_droid`, `pi0_fast_droid`, `pi0_droid` | DROID | Registered, untested on a GPU. |
-| `pi05_aloha`, `pi0_aloha_towel`, `pi0_aloha_tupperware`, `pi0_aloha_pen_uncap`, `pi0_aloha_sim` | ALOHA | Registered, untested on a GPU. |
+`pgs up NAME` takes any entry; `pgs models` lists all 23 with GPU, price, license and status.
 
-Only `pi05_libero` has run on a GPU. The others pass CPU checks against openpi but may fail on a GPU. You can also
-serve your own checkpoint of any openpi config: `pgs up CONFIG@CHECKPOINT`, for example
-`pgs up pi05_droid@gs://my-bucket/pi05_droid_finetune/30000` (untested on a GPU). Details: [MODELS.md](MODELS.md).
+| Family | Entries | Robot | Default GPU, USD/hr | Model time p50, stock → fast | Status |
+|---|---|---|---|---|---|
+| π0.5 (openpi) | `pi05_libero` | LIBERO (sim) | RTX 4090, 1.34 | 75–79 → 31–34 ms | ran on a GPU |
+| π0.5 (openpi) | `pi05_droid` | DROID | RTX 4090, 1.34 | 86.6 ms, stock path | ran on a GPU |
+| π0, π0-FAST, π0.5 (openpi) | `pi0_droid`, `pi0_fast_droid`, `pi05_aloha`, four `pi0_aloha_*` | DROID, ALOHA | RTX 4090, 1.34 | | untested |
+| MolmoAct2 (Ai2) | `molmoact2_libero`, `_droid`, `_so101`, `_yam` | LIBERO, DROID, SO-101, bimanual YAM | RTX 4090, 1.34 | 521–575 → 104–139 ms | ran on a GPU |
+| ABC-VLA (Amazon FAR) | `abc_vla_yam` | bimanual YAM | RTX 4090, 1.34 | 84.0 → 28.8 ms | ran on a GPU |
+| Xiaomi-Robotics-1 | `xiaomi_r1_robocasa365` | RoboCasa365 (sim) | RTX 4090, 1.34 | 267.9 → 65.5 ms | ran on a GPU |
+| GR00T N1.7 (NVIDIA) | `gr00t_n17_libero`; `_goal`, `_object`, `_10` untested | LIBERO | RTX 4090, 1.34 | 118.4 → 68.5 ms | ran on a GPU; needs `HF_TOKEN` |
+| Flex-π | `flex_pi_libero` | LIBERO | A40, 1.22 | 318.5 → 131.9 ms | ran on a GPU |
+| Cosmos 3 (NVIDIA) | `cosmos3_edge_droid`, `cosmos3_nano_droid` | DROID | RTX 5090, 1.89; Nano: A100, 2.99 | 514.0 → 439.5 ms (Edge) | experimental; Nano untested |
+| FLUX 3 Action (Black Forest Labs) | `flux3_action_droid` | DROID | A40, 1.22 | 3180–3228 ms, stock path only | experimental; needs `HF_TOKEN` |
 
-## How it works
+Model time is the server's `infer_ms` median on the default GPU. [MODELS.md](MODELS.md) has the p90s, other GPUs,
+first-start times (up to 7:54 for Flex-π) and the conditions. Licenses differ: FLUX 3 Action is non-commercial,
+MolmoAct2 is meant for research and educational use, and the openpi and ABC-VLA weights carry the Gemma Terms of Use;
+`pgs models` prints each. Flex-π defaults to the A40: the RTX 5090 is 6.7 ms faster (125.2 ms) but had Serverless
+stock only in Europe on 2026-11-16, which costs a robot in the US more round trip than that; `--gpu "RTX 5090"`
+picks it.
 
-`pgs up` creates a Runpod load-balancing serverless endpoint on Runpod's stock PyTorch image and a network volume in
-the same data center. The worker scripts travel in an environment variable of the endpoint, so there is no container
-image to build. On its first start the worker installs openpi at a pinned commit, downloads the checkpoint from
-openpi's public bucket, and serves; then it saves the environment and checkpoint to the volume for later starts.
-Clients talk to it through Runpod's gateway over one websocket with openpi's wire protocol; the Python client sends
-each JPEG request as two halves on two sockets (`connect(..., split=False)` turns that off; [docs/WIRE.md](docs/WIRE.md)).
+## Why it is fast, and still the same model
 
-On `pi05_libero` with an RTX 4090 (or an H200, `--gpu H200`) the worker serves the fast path: realtime-vla's Triton kernels in one CUDA graph,
-with the same bf16 weights, the same 10 flow steps and openpi's own transforms. At every start it must reproduce stock
-openpi's stored actions for a real frame, or it serves openpi's own policy instead. `policy.metadata["playground_serve"]`
-says which path serves (`path`) and why (`path_reason`). Everywhere else the worker serves openpi's own policy.
+Every family has two paths. **Stock** is the model's official inference code, called as its own server or evaluator
+calls it (openpi's `Policy`, the MolmoAct2 repository's server, and so on). **Fast** is the same model with the same
+weights and precision, the same number of denoising steps and the same inputs; what changes is how the work reaches
+the GPU: CUDA graphs, compiled kernels, per-prompt work done once, image preprocessing on the GPU.
 
-### Direct port
+At every start a stored real frame must reproduce the stock path's stored actions within fixed bounds, twice. If it
+does not, or the fast path fails to build, the worker serves stock and says why in its metadata (`path_reason`). For
+π0.5 the fast path's actions differ from stock by 0.0014 on average at the same noise; a new noise draw moves them by
+0.036.
 
-`pgs up MODEL --direct` (an endpoint made with it keeps it) also lists a TCP port on the endpoint. Runpod gives a
-serverless worker a public address and maps that port to it; the worker serves the same protocol there behind TLS,
-with a certificate and a token it makes at every boot and sends in its metadata. The Python client reads them through
-the gateway socket (which checked your API key), opens a second connection straight to the worker and sends its
-requests there. The gateway socket stays open: it starts and keeps the worker, carries the keep-alive, and takes the
-requests again if the direct connection cannot be opened or is lost. Nothing changes in billing, scale to zero or
-start time.
+An example: MolmoAct2 on an RTX 4090 spent about 440 of its 516 ms per call launching the small kernels of a 10-step
+flow over 36 blocks. One CUDA graph around that loop, the model card's own setting that the repository's servers
+leave off, gave 151 ms with bit-identical actions; compiling the blocks and preprocessing the images on the GPU brought
+the served call to 104 ms. Each family's `NOTES.md` ([MolmoAct2's](src/playground_serve/families/molmoact2/NOTES.md),
+for example) records what was measured, tried and left out.
 
-- Measured from the US east coast to an RTX 4090 in US-CA-2 (California), same worker, alternating blocks of
-  requests: the direct port saved about 10 to 12.6 ms per request against the gateway path, and `hot=True` (below)
-  2.3 ms more. Round trip p50 111.6 ms direct with `hot` against 124.8 ms through the gateway, p95 119.5 against
-  133.8 ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)).
-- What you give up: the direct connection does not pass Cloudflare or Runpod's load balancer. It needs outbound TCP
-  to a high port of a plain IP address (some company networks block that; the client then stays on the gateway), its
-  TLS certificate is the worker's own (pinned by the client, not signed by a public authority), and the port is open
-  to the internet behind the token. A reply is one packet: when it is lost, the worker's TCP waits a whole
-  retransmission timeout and that request takes about 385 ms (0.3 to 2 % of direct requests in earlier runs, 1 in
-  2000 in the measured one). `connect(..., direct=False)` keeps a client on the gateway.
-- `connect(..., hot=True)` (any endpoint) asks the worker not to let its thread or GPU idle for about a second after
-  each request: 2.3 ms less model time per request at a remote client's pace on an RTX 4090. The worker's CPU
-  core and GPU stay busy meanwhile (the GPU draws power as if it were working), so it is off by default.
+## Why your own account
 
-### Ownership
+- **Your GPU.** `--gpu H100` serves on another Runpod Serverless GPU (RTX 4090, RTX 5090, A40, L40S, A100, H100,
+  H200) at its price, which `pgs up` prints first.
+- **Your region.** A new endpoint goes to the nearest data center with stock, by round trips measured from your
+  machine (by its time zone until they are measured); `--region US-CA-2` picks one. Moving π0.5 from US-IL-1 to US-NC-1 took 24 ms off every request from the US
+  east coast.
+- **Your network path.** `--direct` sends requests straight to the worker's own address, with TLS and a per-boot token,
+  instead of through Runpod's gateway: 13.2 ms less at p50 with `hot=True`, from the US east coast to US-CA-2
+  ([trade-offs](docs/USAGE.md#direct-port)).
+- **Your bill.** A worker bills only while it runs and stops 5 minutes after the last client leaves (`--idle`); the
+  next connect starts one in about a minute. `--warm` keeps one running.
+- **Your checkpoints.** `pgs up pi05_droid@gs://my-bucket/pi05_droid_finetune/30000` serves your fine-tune of any
+  openpi config (untested on a GPU so far).
+- **Your data.** Observations go from your machine to a worker in your account; the API key goes only to Runpod.
 
-The state file (`~/.config/playground-serve/state.json`, or `$PLAYGROUND_SERVE_HOME/state.json` for one per project)
-holds a random owner id that is part of every resource name `pgs` creates. `up`, `down` and `delete` act only on
-yours. If another state file or user on the same Runpod account has an endpoint for the model, `up` changes nothing
-and offers `--adopt [ID]` (take it over) or `--new` (create your own).
+## Drive a robot
 
-## Limits and known issues
-
-- Only `pi05_libero` has run on a GPU. All other models and custom checkpoints are untested.
-- The fast path runs only for `pi05_libero` on an RTX 4090 or an H200. On the A40 and for every other model the worker runs
-  stock openpi: 75 to 79 ms per inference on the RTX 4090 and about 146 ms on the A40, against 31 to 34 ms on the
-  fast path.
-- A first start depends on the GPU host's download speed (12.4 GB checkpoint plus about 3.5 GB of packages).
-- On some later starts Runpod's gateway took 21 to 34 s to route to a worker that was already ready.
-- `pgs demo` and `example_obs()` know only the LIBERO observation.
-- ALOHA camera images are channel-first, so the client sends them uncompressed (larger requests).
-- `pi0_fast_droid` downloads its tokenizer from Hugging Face at each fresh container.
-- Runpod caps the sum of max workers over all endpoints of an account (5 on the account used for testing). Each
-  endpoint `pgs` creates uses 1, and the region probe uses free slots for a short time.
-- A new endpoint stays in its data center. To move it, `pgs delete MODEL --volume`, then `pgs up MODEL --region DC`
-  (a first start again).
-- Tested on macOS. Linux and Windows have not been tested.
-- The error messages for an account without credit match Runpod's wording by keywords; that case was not seen live.
-
-## Development
+`pgs run so101` connects an SO-101 arm to `molmoact2_so101` through LeRobot's driver and plays the action chunks at
+the model's 30 Hz, with limits on the robot side: the calibrated joint ranges, a speed cap, a hold when no action
+arrives, a prompt before the first motion, and a return to the start pose on Ctrl-C. It starts no GPU.
 
 ```bash
-git clone https://github.com/playground-systems/playground-serve
-cd playground-serve
-uv run pytest -q
+pip install "playground-serve[so101] @ git+https://github.com/playground-systems/playground-serve"   # Python 3.12
+pgs up molmoact2_so101
+pgs run so101 --instruction "put the cube in the bowl" --dry-run   # reads the arm and cameras, moves nothing
+pgs run so101 --instruction "put the cube in the bowl"             # asks, then moves for up to 60 s
 ```
 
-`tests/client/test_import.py` describes how to run the client tests on Python 3.8. `scripts/check_release.sh` checks
-the tree for secrets and private names before a release.
+Status: it ran end to end against a simulated arm (`--sim`, MuJoCo) with the real model on an RTX 4090, 180 s at
+29.7 Hz without an error. It has not run on a real SO-101 yet. Setup, units and safety: [docs/RUN.md](docs/RUN.md).
 
-## License
+## Documentation
 
-Apache License 2.0, see [LICENSE](LICENSE). Third-party code and data, including openpi (Apache 2.0) and realtime-vla
-(MIT), are listed in [NOTICE](NOTICE). The openpi checkpoints are subject to the Gemma Terms of Use.
+- [docs/USAGE.md](docs/USAGE.md): install options, the API key, every command and option, costs, how it works, limits.
+- [MODELS.md](MODELS.md): every entry with its GPU, price, first start, model time, license and checks.
+- [docs/BENCHMARKS.md](docs/BENCHMARKS.md): π0.5's start times, round trips and model time per GPU, with conditions.
+- [docs/WIRE.md](docs/WIRE.md): the wire protocol, for a client in another language.
+- [docs/RUN.md](docs/RUN.md): `pgs run`, the setup of an SO-101 arm, units and safety.
+
+## Roadmap
+
+- Run the 11 untested entries on a GPU, and bring the fast paths to more GPUs.
+- `pgs run so101` on a real SO-101 arm.
+- A local mode that serves on your own GPU, without Runpod.
+- A PyPI release, so that `pip install playground-serve` works.
+
+## Contributing
+
+Issues and pull requests are welcome. A new model family is one folder, `src/playground_serve/families/<family>/`,
+and changes no shared file:
+
+1. `spec.py` declares its entries (checkpoint, GPU pools, volume, RAM, action shape, robot, license, secrets);
+   `models.py` finds it by itself.
+2. `serve.py` serves one checkpoint behind the shared websocket server (`families/common/pgs_server.py`), with the
+   model's official inference code as the stock path, checked against the official server on the same inputs.
+3. `build_env.sh` builds its Python environment; `NOTES.md` holds the license, the measurements and the GPU spend.
+4. A fast path ships only with a self-test reference (`selftest_<entry>.json`: a real frame and the stock actions)
+   and falls back to stock.
+5. `tests/families/test_<family>.py`, then `uv run pytest -q` and `scripts/check_release.sh`.
+
+The existing families are the examples; [MODELS.md](MODELS.md#model-families) describes the volume layout and the
+checkpoint URIs.
+
+## License and credits
+
+Apache License 2.0 ([LICENSE](LICENSE)). Playground Serve builds on [openpi](https://github.com/Physical-Intelligence/openpi)
+by Physical Intelligence (Apache 2.0) and [realtime-vla](https://github.com/dexmal/realtime-vla) by Dexmal (MIT),
+whose Triton kernels run π0.5's fast path. It serves models by Physical Intelligence, Ai2 (MolmoAct2), NVIDIA
+(GR00T N1.7, Cosmos 3), Amazon FAR (ABC-VLA), Xiaomi (Xiaomi-Robotics-1), the Flex-π authors and Black Forest Labs
+(FLUX 3 Action), each under its own license. [NOTICE](NOTICE) lists the third-party code and data; the openpi
+checkpoints are subject to the Gemma Terms of Use.
