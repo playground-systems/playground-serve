@@ -30,7 +30,8 @@ the suite on Python 3.10 to 3.14, the client tests on Python 3.8, and the releas
   (`tests/test_models_openpi.py` and `tests/test_bundle_worker.py`, whose docstrings say what they need), torch (two
   Cosmos 3 checks) and LeRobot (`test_lerobot_units`; [docs/RUN.md](docs/RUN.md#development) has the command). None
   needs a GPU.
-- `tests/run/test_sim.py` skips where MuJoCo cannot render. On Linux without a display, `MUJOCO_GL=egl` renders.
+- `tests/run/test_sim.py` skips where MuJoCo cannot render. On Linux without a display, `MUJOCO_GL=egl` renders with
+  Mesa's EGL (on Ubuntu: `libegl1`, `libegl-mesa0`, `libgl1-mesa-dri`), as the workflow does.
 - `python3 docs/assets/make_assets.py` redraws the README's chart (from MODELS.md) and terminal picture;
   `uv run python docs/assets/make_social_preview.py` redraws the social preview.
 
