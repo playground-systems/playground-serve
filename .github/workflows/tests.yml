@@ -1,0 +1,76 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.11.28"
+  # The client's wire tests compare against the real openpi client; tests/client/test_import.py names this commit too.
+  OPENPI_CLIENT: "openpi-client @ git+https://github.com/Physical-Intelligence/openpi@215abfb217dbac7d5f1273282331b9b1866c0479#subdirectory=packages/openpi-client"
+
+jobs:
+  pytest:
+    # The full suite on each Python that `pgs` supports (3.10 and later, _pgs.py). Tests that need openpi, torch or
+    # LeRobot skip, as on a laptop: the development environment does not install them (CONTRIBUTING.md). On 3.13
+    # and later the dev group builds numpy 1.26 from source (openpi-client pins numpy below 2); the uv cache keeps
+    # the built wheel for later runs.
+    name: pytest (Python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    env:
+      MUJOCO_GL: egl  # tests/run/test_sim.py renders the simulated arm's cameras without a display
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+          cache-suffix: py${{ matrix.python }}
+      - run: uv sync --locked
+      - run: uv run --locked pytest -q -rs
+
+  client-py38:
+    # The client (`from playground_serve import connect`) supports Python 3.8; the uv lock covers 3.10 and later, so
+    # this job builds its own environment, as tests/client/test_import.py describes.
+    name: client (Python 3.8)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+          cache-suffix: py3.8-client
+      - run: uv venv --python 3.8 .venv-py38
+      - run: uv pip install --python .venv-py38/bin/python -e . "pytest>=8.3" "$OPENPI_CLIENT"
+      - run: .venv-py38/bin/python -m pytest -q -rs tests/client tests/test_connect.py tests/test_status.py
+
+  release-check:
+    name: release check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - run: bash scripts/check_release.sh
