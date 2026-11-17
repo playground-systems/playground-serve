@@ -61,10 +61,9 @@ class Libero:
             self.state[6:8] = [0.039, -0.039] if row[6] < 0 else [0.02, -0.02]
 
 
-def policy(turns=TURNS, env=None, wire_model="anthropic/claude-haiku-5-5"):
-    fake = llm_fake.FakeProvider({"turns": turns})
-    e = {"PGS_AGENT_MODEL": wire_model, "ANTHROPIC_API_KEY": "fake", "OPENAI_API_KEY": "fake", **(env or {})}
-    settings = llm_session.Settings.from_env(e)
+def policy(turns=TURNS, env=None, model="opus_5_5", cost=None):
+    fake = llm_fake.FakeProvider({"turns": turns, **({"usage": {"input": 1000, "output": 60, "cost": cost}} if cost is not None else {})})
+    settings = llm_session.Settings.from_env({"PGS_AGENT_MODEL": model, "OPENROUTER_API_KEY": "fake", **(env or {})})
     return serve.AgentPolicy(settings, lambda s: llm_session.make_policy(s, transport=fake.transport())), fake
 
 
@@ -122,7 +121,7 @@ def test_driver_servoes_to_a_target_and_settles():
 
 
 # ------------------------------------------------------------------ episodes through the agent
-def test_episode_on_the_messages_wire():
+def test_an_episode_through_openrouter():
     pol, fake = policy()
     sim = Libero()
     replies = run(pol, sim)
@@ -131,42 +130,24 @@ def test_episode_on_the_messages_wire():
     assert abs(sim.state[2] - 1.0) < 0.006  # lowered by the first call's move_to
     last = replies[-1]["agent"]
     assert last["finished"] == {"kind": "done", "reason": "the bowl is held"}
-    assert last["tokens"]["input"] == 3000 and last["usd"] == pytest.approx(3 * (1000 * 0.10 + 60 * 0.50) / 1e6)
+    # no reported cost in these responses: the price table (Opus 5.5 through OpenRouter, 4 and 20 USD per million)
+    assert last["tokens"]["input"] == 3000 and last["usd"] == pytest.approx(3 * (1000 * 4 + 60 * 20) / 1e6)
+    assert last["usd_source"] == "price table"
     first = fake.requests[0]
-    assert first["model"] == "claude-haiku-5-5" and first["thinking"] == {"type": "adaptive"}
-    assert first["output_config"] == {"effort": "medium"} and "temperature" not in first and "tool_choice" not in first
-    system = first["system"][0]["text"]
-    assert "Franka Panda" in system and llm_session.DEFAULT_NOTES in system  # the card's docs, the default notes
+    assert first["model"] == "anthropic/claude-opus-5.5" and first["reasoning"] == {"effort": "medium"}
+    assert first["cache_control"] == {"type": "ephemeral"} and "temperature" not in first and "tool_choice" not in first
+    system = first["messages"][0]["content"]
+    assert first["messages"][0]["role"] == "system" and "Franka Panda" in system and llm_session.DEFAULT_NOTES in system
     assert "Step budget: step 0/220" in json.dumps(first["messages"])  # max_steps from the request
-    assert {t["name"] for t in first["tools"]} == {"move_to", "sleep", "zoom", "done", "give_up"}
+    assert {t["function"]["name"] for t in first["tools"]} == {"move_to", "sleep", "zoom", "done", "give_up"}
     assert "state[gripper_holding]" in json.dumps(first["messages"])
-    images = [b for m in first["messages"] for b in (m["content"] if isinstance(m["content"], list) else []) if b.get("type") == "image"]
+    images = [b for m in first["messages"] for b in (m["content"] if isinstance(m["content"], list) else []) if b.get("type") == "image_url"]
     assert len(images) == 2
     # Append-only history (image_horizon None): each request's messages begin with the request before's.
-    strip = lambda node: ({k: strip(v) for k, v in node.items() if k != "cache_control"} if isinstance(node, dict)  # noqa: E731
-                          else [strip(v) for v in node] if isinstance(node, list) else node)
     for before, after in zip(fake.requests, fake.requests[1:]):
-        assert strip(after["messages"][: len(before["messages"])]) == strip(before["messages"])
+        assert after["messages"][: len(before["messages"])] == before["messages"]
     turns = [t for r in replies for t in r["agent"].get("turns") or []]
     assert turns and not any("base64" in json.dumps(t) for t in turns)  # transcript without images
-
-
-@pytest.mark.parametrize("model,env,path", [
-    ("openai/gpt-6-luna", {"PGS_AGENT_WIRE": "chat"}, "/chat/completions"),
-    ("openai/gpt-5.3-codex", {}, "/responses"),  # OpenAI's default wire here
-    ("qwen/qwen3-vl", {"PGS_AGENT_BASE_URL": "https://vllm.example.com/v1", "PGS_AGENT_API_KEY_ENV": "OPENAI_API_KEY",
-                       "PGS_AGENT_MAX_USD_EPISODE": "none"}, "/chat/completions"),
-])
-def test_other_wires(model, env, path):
-    pol, fake = policy(env=env, wire_model=model)
-    sim = Libero()
-    replies = run(pol, sim, n=30)
-    last = replies[-1]["agent"]
-    assert last["finished"]["kind"] == "done"
-    assert last["tokens"]["input"] == 3000 and (last["usd"] or 0) > 0 or model.startswith("qwen")  # metered on every wire
-    assert abs(sim.state[2] - 1.0) < 0.006
-    assert all(r["tools"] for r in fake.requests)
-    assert fake.requests and ("input" in fake.requests[0] or "messages" in fake.requests[0])
 
 
 def test_episodes_by_id_and_by_connection():
@@ -193,7 +174,7 @@ def test_warm_up_request_calls_no_model():
 
 
 def test_caps():
-    pol, fake = policy(turns=[TURNS[0]] * 50, env={"PGS_AGENT_MAX_USD_EPISODE": "0.0002"})
+    pol, fake = policy(turns=[TURNS[0]] * 50, env={"PGS_AGENT_MAX_USD_EPISODE": "0.0002"}, cost=0.0001)
     replies = run(pol, Libero(), n=30)
     assert replies[-1]["agent"]["finished"]["kind"] == "budget" and len(fake.requests) == 2
     pol, fake = policy(turns=[{"text": "thinking out loud"}] * 5)
@@ -201,35 +182,30 @@ def test_caps():
     assert reply["agent"]["finished"]["kind"] == "give_up" and "no tool call" in reply["agent"]["error"]
 
 
-def test_settings():
-    with pytest.raises(ValueError, match="no price"):
-        llm_session.Settings.from_env({"PGS_AGENT_MODEL": "openai/gpt-5.5"})
-    assert llm_session.Settings.from_env({"PGS_AGENT_MODEL": "openai/gpt-5.5", "PGS_AGENT_MAX_USD_EPISODE": "none"}).max_usd_episode is None
-    with pytest.raises(ValueError, match="https"):
-        llm_session.Settings.from_env({"PGS_AGENT_BASE_URL": "http://example.com/v1"})
-    s = llm_session.Settings.from_env({"ANTHROPIC_API_KEY": "sk-secret", "HF_TOKEN": "hf_x"})
-    assert set(s.keys) == {"ANTHROPIC_API_KEY"} and "sk-secret" not in json.dumps(s.public())
+def test_settings_take_the_nine_only():
+    with pytest.raises(ValueError, match="one of the agent models"):
+        llm_session.Settings.from_env({"PGS_AGENT_MODEL": "anthropic/claude-haiku-5-5"})
+    s = llm_session.Settings.from_env({"OPENROUTER_API_KEY": "sk-or-secret", "ANTHROPIC_API_KEY": "sk-ant", "HF_TOKEN": "hf_x"})
+    assert s.model == "opus_5_5" and set(s.keys) == {"OPENROUTER_API_KEY"} and "sk-or" not in json.dumps(s.public())
+    assert llm_session.Settings.from_env({"RS_MODEL": "kimi_3_1"}).public()["slug"] == "moonshotai/kimi-k3.1-pro"
 
 
 def test_pricing_reads_each_wire():
     assert llm_pricing.wire_tokens({"input_tokens": 1000, "input_tokens_details": {"cached_tokens": 800}, "output_tokens": 50}) == \
         {"input": 200, "output": 50, "cache_read": 800, "cache_write": 0}
-    assert llm_pricing.wire_tokens({"prompt_tokens": 100, "prompt_tokens_details": {"cached_tokens": 60}, "completion_tokens": 7}) == \
-        {"input": 40, "output": 7, "cache_read": 60, "cache_write": 0}
-    assert llm_pricing.usd_of("openai/gpt-6-luna", {"input": 1_000_000, "output": 0, "cache_read": 1_000_000, "cache_write": 0}) == pytest.approx(0.11)
-    assert llm_pricing.tokens({"input_tokens": 10, "cache_read_input_tokens": 90, "output_tokens": 5}) == \
-        {"input": 10, "output": 5, "cache_read": 90, "cache_write": 0}
-    assert llm_pricing.tokens({"prompt_tokens": 100, "completion_tokens": 7}) == {"input": 100, "output": 7, "cache_read": 0, "cache_write": 0}
-    assert llm_pricing.usd("anthropic/claude-opus-5-5", {"input_tokens": 1_000_000}) == pytest.approx(4.0)
+    assert llm_pricing.wire_tokens({"prompt_tokens": 100, "prompt_tokens_details": {"cached_tokens": 60, "cache_write_tokens": 30}, "completion_tokens": 7}) == \
+        {"input": 10, "output": 7, "cache_read": 60, "cache_write": 30}
+    assert llm_pricing.usd_of("gemini_3_8_flash_high", {"input": 1_000_000, "output": 0, "cache_read": 1_000_000, "cache_write": 0}) == pytest.approx(0.9075)
+    assert llm_pricing.price("anthropic/claude-opus-5-5") is None  # nothing outside the nine
 
 
 def test_a_provider_failure_fails_the_request():
     import httpx
 
-    settings = llm_session.Settings.from_env({"ANTHROPIC_API_KEY": "bad"})
-    deny = httpx.MockTransport(lambda req: httpx.Response(401, json={"error": {"type": "authentication_error"}}))
+    settings = llm_session.Settings.from_env({"OPENROUTER_API_KEY": "bad"})
+    deny = httpx.MockTransport(lambda req: httpx.Response(401, json={"error": {"code": 401, "message": "No auth credentials found"}}))
     pol = serve.AgentPolicy(settings, lambda s: llm_session.make_policy(s, transport=deny))
-    with pytest.raises(llm_session.AgentFailure, match="rejected"):
+    with pytest.raises(llm_session.AgentFailure, match="^key: .*rejected"):
         pol.infer(Libero().request(), "c1")
 
 
@@ -266,7 +242,7 @@ def test_custom_environment_card_and_reset():
     out = pol.infer(req(True), "c1")
     assert out["actions"].shape == (10, 10) and np.all(np.diff(out["actions"][:, 2]) <= 0)  # absolute targets going down
     body = fake.requests[0]
-    assert "Environment step budget" in body["system"][0]["text"] and "the mug rests on the shelf" in body["system"][0]["text"]
+    assert "Environment step budget" in body["messages"][0]["content"] and "the mug rests on the shelf" in body["messages"][0]["content"]
     assert "state[gripper_qpos]" in json.dumps(body["messages"])
     pol.infer(req(), "c1")
     pol.infer(req(True), "c1")  # reset: a new episode on the same connection
@@ -404,20 +380,19 @@ def test_zoom_and_motion_reports():
 import llm_models  # noqa: E402
 
 
-@pytest.mark.parametrize("slug", list(llm_models.MODELS))
-def test_each_openrouter_model(slug):
+@pytest.mark.parametrize("name", list(llm_models.MODELS))
+def test_each_openrouter_model(name):
     """Each of the nine through OpenRouter, on recorded responses: a tool call with images in the conversation, the
     request as OpenRouter takes it (reasoning, output limit, routing, Claude's cache breakpoint), the reported cost."""
-    m = llm_models.MODELS[slug]
+    m = llm_models.MODELS[name]
     fake = llm_fake.FakeProvider({"turns": [TURNS[0], TURNS[2]], "usage": {"input": 5000, "output": 300, "cost": 0.0123}})
-    settings = llm_session.Settings.from_env({"PGS_AGENT_PROVIDER": "openrouter", "PGS_AGENT_MODEL": slug,
-                                              "OPENROUTER_API_KEY": "fake", "ANTHROPIC_API_KEY": "never-sent"})
-    assert settings.keys == {"OPENROUTER_API_KEY": "fake"} and settings.base_url == llm_models.BASE_URL
+    settings = llm_session.Settings.from_env({"PGS_AGENT_MODEL": name, "OPENROUTER_API_KEY": "fake", "ANTHROPIC_API_KEY": "never-sent"})
+    assert settings.keys == {"OPENROUTER_API_KEY": "fake"}
     pol = serve.AgentPolicy(settings, lambda s: llm_session.make_policy(s, transport=fake.transport()))
     sim = Libero()
     replies = run(pol, sim, n=30)
     body = fake.requests[0]
-    assert body["model"] == slug and body["reasoning"] == {"effort": m.effort} and "reasoning_effort" not in body
+    assert body["model"] == m.slug and body["reasoning"] == {"effort": m.effort} and "reasoning_effort" not in body
     assert body["max_tokens"] == m.max_tokens and body["provider"]["require_parameters"] is True
     assert ("cache_control" in body) == m.cache
     assert {t["function"]["name"] for t in body["tools"]} >= {"move_to", "zoom", "done"}
@@ -430,9 +405,9 @@ def test_each_openrouter_model(slug):
 def test_openrouter_failures_are_classed():
     for status, cls in ((402, "credit"), (403, "moderation"), (200, "provider")):
         fake = llm_fake.FakeProvider({"turns": [{"error": {"status": status, "code": 502 if status == 200 else status, "message": "no"}}] * 4})
-        settings = llm_session.Settings.from_env({"PGS_AGENT_PROVIDER": "openrouter", "PGS_AGENT_MODEL": "google/gemini-3.8-flash", "OPENROUTER_API_KEY": "fake"})
+        settings = llm_session.Settings.from_env({"PGS_AGENT_MODEL": "gemini_3_8_flash_high", "OPENROUTER_API_KEY": "fake"})
         pol = serve.AgentPolicy(settings, lambda s: llm_session.make_policy(s, transport=fake.transport()))
         with pytest.raises(llm_session.AgentFailure, match=f"^{cls}:"):
             pol.infer(Libero().request(), "c1")
-    with pytest.raises(ValueError, match="one of the OpenRouter models"):
-        llm_session.Settings.from_env({"PGS_AGENT_PROVIDER": "openrouter", "PGS_AGENT_MODEL": "openai/gpt-4o"})
+    with pytest.raises(ValueError, match="one of the agent models"):
+        llm_session.Settings.from_env({"PGS_AGENT_MODEL": "openai/gpt-4o"})

@@ -4,8 +4,8 @@ its targets into the rows each reply carries.
 The agent loop is inspect-robots-agent's LLMAgentPolicy, unchanged (pinned in requirements.txt): each act() shows the
 model the state as labelled text and the camera images, runs model turns until one tool call is valid (move_to or
 move_joints, sleep, take_pic with images on demand, done, give_up), and returns an Inspect Robots ActionChunk of
-interpolated targets. Its model layer speaks each provider's own wire (Anthropic Messages, OpenAI Chat Completions and
-Responses, Google's Interactions and Live APIs) and any OpenAI-compatible server through a base URL.
+interpolated targets. Here its Chat Completions client reaches the nine agent models through OpenRouter
+(llm_models.py); the package's clients for other wires and providers stay in the package, unused by this server.
 
 This module adds what a remote simulator needs around it:
 - Settings: the model and its limits, read once from the endpoint's environment (never from a request).
@@ -32,8 +32,6 @@ import llm_models
 import llm_pricing
 from llm_card import Card
 
-KEY_ENVS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "XAI_API_KEY",
-            "GROQ_API_KEY", "MISTRAL_API_KEY", "DEEPSEEK_API_KEY")
 # Wire errors that the agent raises after its retries (inspect_robots_agent: "LLM request rejected" for a 4xx,
 # "LLM request failed after N attempts"): the provider or the key is at fault, so the request fails as a server error
 # (the run's policy_error) instead of the arm holding still through every later episode.
@@ -53,7 +51,7 @@ ZOOM_TOOL = {
         "description": (
             "Look closer: a box of one camera's latest image, cut from that camera's full-resolution frame and enlarged "
             f"so its long side is {ZOOM_PX} pixels. It arrives with the next observation as the camera 'zoom'. It costs "
-            "one model call, one action chunk with the arm holding still (a few control steps), and the image: on Claude "
+            "one model call, one action chunk with the arm holding still (a few control steps), and the image: on most "
             f"models an image costs about width x height / 750 input tokens, so a {ZOOM_PX} x {ZOOM_PX} view is about "
             f"{ZOOM_PX * ZOOM_PX // 750} tokens. The box is x0, y0, x1, y1 as fractions of the image's width and height "
             "from its top-left corner (0 to 1), each side at least 0.05."),
@@ -81,12 +79,11 @@ DEFAULT_NOTES = ("The robot, the objects and their physics are simulated; the ca
 
 @dataclass(frozen=True)
 class Settings:
-    model: str = "anthropic/claude-haiku-5-5"
-    provider: str = ""  # "openrouter": the model is an OpenRouter slug of llm_models.MODELS, on OpenRouter's key
-    wire: str = ""  # "" = messages for anthropic/*, else chat
-    base_url: str | None = None
-    api_key_env: str | None = None
-    effort: str | None = "medium"
+    """The model and its limits, from the endpoint's environment. The model is one of the nine of llm_models.MODELS,
+    reached through OpenRouter with OPENROUTER_API_KEY; nothing else is accepted."""
+
+    model: str = llm_models.DEFAULT  # a registry name of llm_models.MODELS
+    effort: str | None = None  # None: the model's own setting (llm_models)
     max_calls: int = 40  # model calls per episode
     max_usd_episode: float | None = 1.0
     max_usd_total: float | None = None  # this process, over every episode
@@ -98,79 +95,51 @@ class Settings:
     keys: Mapping[str, str] = field(default_factory=dict, repr=False)
 
     @property
-    def openrouter(self) -> llm_models.OpenRouterModel | None:
-        return llm_models.MODELS.get(self.model) if self.provider == "openrouter" else None
+    def route(self) -> llm_models.OpenRouterModel:
+        return llm_models.MODELS[self.model]
 
     @property
     def price_key(self) -> str:
-        return f"openrouter/{self.model}" if self.provider == "openrouter" else self.model
-
-    @property
-    def resolved_wire(self) -> str:
-        if self.provider == "openrouter":
-            return "chat"
-        if self.wire or self.base_url:
-            return self.wire or "chat"
-        # Anthropic's Messages API; OpenAI's Responses API (the Codex models are served there only, and the GPT-6
-        # models call functions on Chat Completions only without reasoning); Chat Completions for the rest.
-        return {"anthropic": "messages", "openai": "responses"}.get(self.model.split("/")[0], "chat")
+        return f"openrouter/{self.model}"
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Settings":
         e = os.environ if env is None else env
         num = lambda k, d: (float(e[k]) if e.get(k, "").strip() not in ("", "none") else (None if e.get(k, "").strip() == "none" else d))  # noqa: E731
-        key_names = set(KEY_ENVS) | ({e["PGS_AGENT_API_KEY_ENV"]} if e.get("PGS_AGENT_API_KEY_ENV") else set())
+        model = e.get("PGS_AGENT_MODEL") or e.get("RS_MODEL") or llm_models.DEFAULT
+        if model not in llm_models.MODELS:
+            raise ValueError(f"PGS_AGENT_MODEL must be one of the agent models: {', '.join(llm_models.MODELS)}")
         horizon = e.get("PGS_AGENT_IMAGE_HORIZON", "").strip()
-        provider = e.get("PGS_AGENT_PROVIDER", "")
-        if provider == "openrouter":
-            if e.get("PGS_AGENT_MODEL") not in llm_models.MODELS:
-                raise ValueError(f"PGS_AGENT_MODEL must be one of the OpenRouter models: {', '.join(llm_models.MODELS)}")
-            key_names.add(llm_models.KEY_ENV)
-        elif provider:
-            raise ValueError("PGS_AGENT_PROVIDER is openrouter, or unset for a provider of the model's own prefix")
-        or_model = llm_models.MODELS.get(e.get("PGS_AGENT_MODEL", "")) if provider == "openrouter" else None
-        s = cls(model=e.get("PGS_AGENT_MODEL") or cls.model, provider=provider, wire=e.get("PGS_AGENT_WIRE", ""),
-                base_url=llm_models.BASE_URL if or_model else (e.get("PGS_AGENT_BASE_URL") or None),
-                api_key_env=llm_models.KEY_ENV if or_model else (e.get("PGS_AGENT_API_KEY_ENV") or None),
-                effort=(e.get("PGS_AGENT_EFFORT") or (or_model.effort if or_model else "medium")) if e.get("PGS_AGENT_EFFORT", "") != "default" else None,
-                max_calls=int(e.get("PGS_AGENT_MAX_CALLS") or 40),
-                max_usd_episode=num("PGS_AGENT_MAX_USD_EPISODE", 1.0), max_usd_total=num("PGS_AGENT_MAX_USD", None),
-                images=e.get("PGS_AGENT_IMAGES") or "always",
-                image_horizon=int(horizon) if horizon not in ("", "none") else None,
-                notes="\n".join(x for x in (DEFAULT_NOTES, e.get("PGS_AGENT_NOTES")) if x),
-                zoom=e.get("PGS_AGENT_ZOOM", "1") != "0", max_speed_frac=float(e.get("PGS_AGENT_MAX_SPEED_FRAC") or 0.1),
-                keys={k: e[k] for k in ([llm_models.KEY_ENV] if or_model else key_names) if e.get(k)})
-        s.check(e)
-        return s
-
-    def check(self, env: Mapping[str, str] | None = None) -> None:
-        if self.base_url and not (self.base_url.startswith("https://") or os.environ.get("PGS_AGENT_ALLOW_HTTP") == "1"):
-            raise ValueError("PGS_AGENT_BASE_URL must be https:// (PGS_AGENT_ALLOW_HTTP=1 for a local server on this machine)")
-        capped = self.max_usd_episode is not None or self.max_usd_total is not None
-        if capped and llm_pricing.price(self.price_key, env) is None:
-            raise ValueError(f"{self.model} has no price here, so a USD cap cannot be kept: set PGS_AGENT_PRICE, or "
-                             "PGS_AGENT_MAX_USD_EPISODE=none and PGS_AGENT_MAX_USD=none")
+        effort = e.get("PGS_AGENT_EFFORT") or None
+        return cls(model=model, effort=effort,
+                   max_calls=int(e.get("PGS_AGENT_MAX_CALLS") or 40),
+                   max_usd_episode=num("PGS_AGENT_MAX_USD_EPISODE", 1.0), max_usd_total=num("PGS_AGENT_MAX_USD", None),
+                   images=e.get("PGS_AGENT_IMAGES") or "always",
+                   image_horizon=int(horizon) if horizon not in ("", "none") else None,
+                   notes="\n".join(x for x in (DEFAULT_NOTES, e.get("PGS_AGENT_NOTES")) if x),
+                   zoom=e.get("PGS_AGENT_ZOOM", "1") != "0", max_speed_frac=float(e.get("PGS_AGENT_MAX_SPEED_FRAC") or 0.1),
+                   keys={k: e[k] for k in (llm_models.KEY_ENV,) if e.get(k)})
 
     def public(self) -> dict[str, Any]:
         """The settings without keys, for the metadata and logs."""
-        return {"model": self.model, "provider": self.provider or self.model.split("/")[0], "wire": self.resolved_wire, "base_url": self.base_url, "effort": self.effort,
+        r = self.route
+        return {"model": self.model, "title": r.title, "provider": "openrouter", "slug": r.slug, "effort": self.effort or r.effort,
                 "max_calls": self.max_calls, "max_usd_episode": self.max_usd_episode, "max_usd_total": self.max_usd_total,
-                "images": self.images, "zoom": self.zoom, "image_horizon": self.image_horizon, "notes": bool(self.notes and self.notes != DEFAULT_NOTES)}
+                "images": self.images, "zoom": self.zoom, "image_horizon": self.image_horizon,
+                "notes": bool(self.notes and self.notes != DEFAULT_NOTES)}
 
 
 def make_policy(s: Settings, transport: Any = None):
-    """inspect-robots-agent's LLMAgentPolicy for one episode. The keys go in its env mapping, so each policy sends
-    only the key of its own provider, and only to that provider's endpoint (or the endpoint's base URL)."""
-    from inspect_robots_agent.policy import LLMAgentPolicy
-
+    """inspect-robots-agent's LLMAgentPolicy for one episode, on OpenRouter's Chat Completions wire. The key goes in its
+    env mapping, so it is sent only to OpenRouter."""
     import httpx
 
-    inner = transport or httpx.HTTPTransport()
-    if s.openrouter is not None:
-        inner = llm_models.OpenRouterTransport(s.openrouter, inner)
-    meter = Meter(inner)
-    policy = LLMAgentPolicy(model=s.model, base_url=s.base_url, api_key_env=s.api_key_env, wire=s.resolved_wire,
-                            wire_capture=False, max_llm_calls=s.max_calls, effort=s.effort, images=s.images,
+    from inspect_robots_agent.policy import LLMAgentPolicy
+
+    route = s.route
+    meter = Meter(llm_models.OpenRouterTransport(route, transport or httpx.HTTPTransport()))
+    policy = LLMAgentPolicy(model=route.slug, base_url=llm_models.BASE_URL, api_key_env=llm_models.KEY_ENV, wire="chat",
+                            wire_capture=False, max_llm_calls=s.max_calls, effort=s.effort or route.effort, images=s.images,
                             image_horizon=s.image_horizon, eval_notes=s.notes, max_speed_frac=s.max_speed_frac,
                             transport=meter, env=dict(s.keys), transcript_echo=False)
     policy.pgs_meter = meter

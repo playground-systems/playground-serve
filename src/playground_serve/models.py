@@ -32,6 +32,8 @@ POOL_PRICES = {"ADA_24": 1.34, "AMPERE_48": 1.22, "ADA_48_PRO": 1.89, "ADA_32_PR
 POOL_GPUS = {"ADA_24": "RTX 4090", "AMPERE_48": "A40", "ADA_48_PRO": "L40S", "ADA_32_PRO": "RTX 5090",
              "AMPERE_80": "A100", "ADA_80_PRO": "H100", "HOPPER_141": "H200"}
 PRICES_READ = "2026-11-13"
+# Runpod serverless CPU prices, USD per vCPU-hour (region.PROBE_CPU's, read 2026-11-16): the LLM agents' workers.
+CPU_PRICES = {"cpu3c": 0.036}
 # Environment tar 8.2 GB + one checkpoint (10.1 to 11.6 GiB, read from the public bucket) + tokenizer and JAX caches
 # (a few MB) = about 21 GB. 40 GB is what pi05_libero ran with, and leaves room for a second model on the same volume.
 VOLUME_GB = 40
@@ -58,6 +60,8 @@ class ModelSpec:
     action_shape: tuple = ()  # (horizon, action_dim) of one reply, where the family states it
     experimental: bool = False  # slow or not fully verified: marked in `pgs models` and MODELS.md, noted at `pgs up`
     min_cuda: str = ""  # lowest host CUDA the family's environment needs, if above the image's (launcher.cuda_floor)
+    cpu: str = ""  # a CPU worker (cpu3c-2) in place of gpu_pools: an LLM agent, whose model runs at its provider
+    agent: dict = dataclasses.field(default_factory=dict)  # an LLM agent's route: provider, slug, title, prices
 
 
 def _entry(name: str, robot: str, checkpoint: str | None = None, gpu_validated: str = "") -> ModelSpec:
@@ -129,7 +133,8 @@ def _family_specs() -> dict[str, ModelSpec]:
                 robot=p.robot, gpu_validated=_validated(p.gpu_validated),
                 license=getattr(p, "license", "") or getattr(module, "LICENSE", ""),
                 family=family, env=dict(p.env), secrets=tuple(p.secrets), action_shape=tuple(p.action_shape),
-                experimental=bool(getattr(p, "experimental", False)), min_cuda=getattr(p, "min_cuda", ""))
+                experimental=bool(getattr(p, "experimental", False)), min_cuda=getattr(p, "min_cuda", ""),
+                cpu=getattr(p, "cpu", ""), agent=dict(getattr(p, "agent", {}) or {}))
             _SPEC_MODULES[p.name] = module
     _FAMILY_SPECS = found
     return found
@@ -145,7 +150,7 @@ def get(name: str) -> ModelSpec:
     """A registered model, or a custom one written CONFIG@CHECKPOINT (see custom)."""
     spec = _REGISTRY.get(name) or _family_specs().get(name)
     if spec is not None:
-        return dataclasses.replace(spec, gpu_pools=list(spec.gpu_pools), env=dict(spec.env))
+        return dataclasses.replace(spec, gpu_pools=list(spec.gpu_pools), env=dict(spec.env), agent=dict(spec.agent))
     if "@" in name:
         return custom(*name.split("@", 1))
     raise KeyError(f"unknown model {name!r}: use one of {', '.join(names())}, or CONFIG@CHECKPOINT for your own")
@@ -183,6 +188,12 @@ def table(live_prices: dict | None = None) -> str:
     rows = [("Model", "Family", "Robot", "GPU (pool)", "USD/hr", "Validated", "License")]
     for name in names():
         spec = get(name)
+        if spec.cpu:  # an LLM agent: a CPU worker; its tokens are billed by its provider
+            flavor, vcpu = spec.cpu.split("-")[:2]
+            rows.append((name, spec.family, spec.robot, f"CPU ({flavor}, {vcpu} vCPU)", f"{CPU_PRICES.get(flavor, 0) * int(vcpu):.3f}",
+                         ("answered a tool call " + spec.gpu_validated) if spec.gpu_validated else "untested",
+                         f"{spec.agent.get('title', '')} via OpenRouter ({spec.agent.get('slug', '')}); " + spec.license))
+            continue
         pool = spec.gpu_pools[0]
         price = (live_prices or {}).get(pool, POOL_PRICES.get(pool))
         rows.append((name, spec.family, spec.robot, f"{POOL_GPUS.get(pool, '?')} ({pool})",
@@ -196,4 +207,6 @@ def table(live_prices: dict | None = None) -> str:
             f"Prices: Runpod list prices read {PRICES_READ} (no Runpod key, or the live read failed; with a key "
             "`pgs models` reads the live ones).")
     return "\n".join(lines + ["", note, "A worker bills only while it runs; volumes bill per GB-month until "
-                                      "`pgs delete MODEL --volume`. Details: MODELS.md."])
+                                      "`pgs delete MODEL --volume`. LLM agents (family llm_agent) run on a CPU worker "
+                                      "and bill their tokens to the OPENROUTER_API_KEY they were started with. "
+                                      "Details: MODELS.md."])

@@ -35,28 +35,35 @@ KEY_ENV = "OPENROUTER_API_KEY"
 
 @dataclass(frozen=True)
 class OpenRouterModel:
-    slug: str
+    name: str  # the registry name (`pgs up <name>`)
+    slug: str  # OpenRouter's model id
     title: str  # as the service's users name it
     prices: tuple[float, float, float, float]
     effort: str = "medium"  # the `reasoning.effort` sent
     max_tokens: int = 16000  # output limit per call (thinking included)
     cache: bool = False  # add a top-level cache_control (Claude caches only at breakpoints)
     data_collection: str = "deny"
+    verified: str = "2026-11-17"  # the date it answered a real tool call with images through OpenRouter (llm_agent NOTES.md)
     note: str = ""
 
 
-MODELS: dict[str, OpenRouterModel] = {m.slug: m for m in (
-    OpenRouterModel("anthropic/claude-fable-5.2", "Fable 5.2", (8.00, 40.00, 0.20, 10.00), cache=True),
-    OpenRouterModel("anthropic/claude-opus-5.5", "Opus 5.5", (4.00, 20.00, 0.20, 5.00), cache=True),
-    OpenRouterModel("google/gemini-4-carbon", "Gemini 4 Carbon", (2.00, 10.00, 0.10, 0.1875)),
-    OpenRouterModel("google/gemini-4-argon", "Gemini 4 Argon", (2.00, 10.00, 0.10, 0.1875)),
-    OpenRouterModel("google/gemini-3.8-flash", "Gemini 3.8 Flash (high)", (0.825, 4.125, 0.0825, 0.0417), effort="high"),
-    OpenRouterModel("openai/gpt-6-astra", "GPT-6 Astra", (10.00, 50.00, 1.00, 12.50)),
-    OpenRouterModel("openai/gpt-6.1-sol", "GPT 6.1 Sol", (2.00, 10.00, 0.10, 2.50)),
-    OpenRouterModel("meta/muse-wonder", "Muse Wonder 1.0", (4.00, 20.00, 0.20, 4.00)),
-    OpenRouterModel("moonshotai/kimi-k3.1-pro", "Kimi 3.1", (0.2403, 8.4023, 0.20, 0.2403),
-                    note="OpenRouter lists Kimi K3.1 Pro only; 'Kimi 3.1' is served as it"),
+# The nine robot-use models, and nothing else: Playground Serve registers each as a model of the llm_agent family
+# (spec.py), and Playground Bench's list of agent models is generated from these entries.
+MODELS: dict[str, OpenRouterModel] = {m.name: m for m in (
+    OpenRouterModel("fable_5_2", "anthropic/claude-fable-5.2", "Fable 5.2", (8.00, 40.00, 0.20, 10.00), cache=True),
+    OpenRouterModel("opus_5_5", "anthropic/claude-opus-5.5", "Opus 5.5", (4.00, 20.00, 0.20, 5.00), cache=True),
+    OpenRouterModel("gemini_4_carbon", "google/gemini-4-carbon", "Gemini 4 Carbon", (2.00, 10.00, 0.10, 0.1875)),
+    OpenRouterModel("gemini_4_argon", "google/gemini-4-argon", "Gemini 4 Argon", (2.00, 10.00, 0.10, 0.1875)),
+    OpenRouterModel("gemini_3_8_flash_high", "google/gemini-3.8-flash", "Gemini 3.8 Flash (high)", (0.825, 4.125, 0.0825, 0.0417),
+                    effort="high"),
+    OpenRouterModel("gpt_6_astra", "openai/gpt-6-astra", "GPT-6 Astra", (10.00, 50.00, 1.00, 12.50)),
+    OpenRouterModel("gpt_6_1_sol", "openai/gpt-6.1-sol", "GPT 6.1 Sol", (2.00, 10.00, 0.10, 2.50)),
+    OpenRouterModel("muse_wonder_1_0", "meta/muse-wonder", "Muse Wonder 1.0", (4.00, 20.00, 0.20, 4.00)),
+    OpenRouterModel("kimi_3_1", "moonshotai/kimi-k3.1-pro", "Kimi 3.1", (0.2403, 8.4023, 0.20, 0.2403),
+                    note="OpenRouter lists Kimi K3.1 Pro (moonshotai/kimi-k3.1-pro) only; it serves 'Kimi 3.1'"),
 )}
+DEFAULT = "opus_5_5"
+
 
 # OpenRouter's error classes by HTTP status, for the failure the server raises.
 ERROR_CLASSES = {401: "key", 402: "credit", 403: "moderation", 408: "timeout", 429: "rate_limit", 502: "provider",

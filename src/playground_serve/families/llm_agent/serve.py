@@ -28,12 +28,11 @@ ends the request with the server's error frame; the client's run then fails as t
 Metadata: {"playground_serve": {..., "agent": true, "agent_settings": the settings without keys}, "image_mode": "jpeg",
 "image_size": "native"}: the client sends each camera at its own size as JPEG.
 
-Endpoint env (llm_session.Settings.from_env): PGS_AGENT_MODEL (provider/model, as Inspect Robots names it, for example
-anthropic/claude-haiku-5-5), PGS_AGENT_WIRE, PGS_AGENT_BASE_URL and PGS_AGENT_API_KEY_ENV (an OpenAI-compatible
-server), PGS_AGENT_EFFORT, PGS_AGENT_MAX_CALLS, PGS_AGENT_MAX_USD_EPISODE, PGS_AGENT_MAX_USD, PGS_AGENT_IMAGES,
-PGS_AGENT_IMAGE_HORIZON, PGS_AGENT_NOTES, PGS_AGENT_PRICE, and the provider's key (ANTHROPIC_API_KEY, OPENAI_API_KEY,
-GEMINI_API_KEY, OPENROUTER_API_KEY, or the variable PGS_AGENT_API_KEY_ENV names). Nothing here logs a prompt, an image
-or a key: the log lines hold counts.
+Endpoint env (llm_session.Settings.from_env): PGS_AGENT_MODEL or RS_MODEL, one of the nine agent models by registry
+name (llm_models.MODELS; `pgs up <name>` sets RS_MODEL), reached through OpenRouter with OPENROUTER_API_KEY; and the
+limits PGS_AGENT_EFFORT, PGS_AGENT_MAX_CALLS, PGS_AGENT_MAX_USD_EPISODE, PGS_AGENT_MAX_USD, PGS_AGENT_IMAGES,
+PGS_AGENT_IMAGE_HORIZON, PGS_AGENT_NOTES, PGS_AGENT_ZOOM. Nothing here logs a prompt, an image or a key: the log lines
+hold counts.
 
     PYTHONPATH=<this folder>:<families/common>:<worker> python serve.py --port 8000 [--fake script.json]
 """
@@ -201,13 +200,11 @@ def main() -> None:
         import llm_fake
 
         fake = llm_fake.FakeProvider(pathlib.Path(args.fake))
-        env.setdefault("PGS_AGENT_MODEL", "anthropic/claude-haiku-5-5")
-        env["ANTHROPIC_API_KEY"] = env["OPENAI_API_KEY"] = "fake"  # the transport below never sends a request out
+        env["OPENROUTER_API_KEY"] = "fake"  # the transport below never sends a request out
         factory = lambda s: llm_session.make_policy(s, transport=fake.transport())  # noqa: E731
     settings = llm_session.Settings.from_env(env)
-    if not settings.keys and not settings.base_url:
-        raise SystemExit("no provider key in the environment (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, "
-                         "OPENROUTER_API_KEY, or the variable PGS_AGENT_API_KEY_ENV names)")
+    if not settings.keys:
+        raise SystemExit("no OPENROUTER_API_KEY in the environment: the agent models are reached through OpenRouter")
     log("process_start", settings=settings.public(), fake=bool(args.fake))
     server = AgentServer(AgentPolicy(settings, factory), args.host, args.port).start()
     pathlib.Path(pgs_server.READY_FILE).touch()
