@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import json
 import importlib.util
 import io
 import subprocess
@@ -210,7 +211,9 @@ def test_every_entry_fits_runpods_request_limit_with_a_margin(name, tmp_path):
     for run in runs:
         env = {**bundle.endpoint_env(run, RELEASE), **{k: "x" * 64 for k in run.secrets}, DIRECT_KEY: str(DIRECT_PORT)}
         env[RELEASE_KEY] = release_id(env)
-        size = launcher._largest_request(name, run, env, GPUS, DCS, {"min": 1, "max": 1, "idleTimeout": 300})
+        want = {"min": 1, "max": 1, "idleTimeout": 300}
+        size = (len(json.dumps(launcher._agent_body(run, env, want)).encode()) if run.cpu else
+                launcher._largest_request(name, run, env, GPUS, DCS, want))
         assert size <= (1 - MARGIN) * MAX_REQUEST_BYTES, (name, run.env.get("RS_VERIFY"), size)
 
 

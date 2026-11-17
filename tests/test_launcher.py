@@ -155,7 +155,7 @@ class FakeApi:
         self.calls.append(("create_endpoint", copy.deepcopy(body)))
         if self.endpoint_errors:
             raise self.endpoint_errors.pop(0)
-        if (body["gpu"]["pools"][0], body["dataCenterIds"][0]) in self.refuse:
+        if "gpu" in body and (body["gpu"]["pools"][0], body["dataCenterIds"][0]) in self.refuse:
             raise ApiError(400, "POST", "/serverless", "no capacity")
         eid = self._id("ep")
         ep = {**copy.deepcopy(body), "id": eid, "createdAt": f"2026-11-13T00:00:{self.n:02d}Z",
