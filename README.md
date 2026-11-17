@@ -1,7 +1,7 @@
 # Playground Serve
 
 [![Tests](https://github.com/playground-systems/playground-serve/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/playground-systems/playground-serve/actions/workflows/tests.yml)
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/playground-systems/playground-serve/blob/main/LICENSE)
 [![Python: pgs 3.10+, client 3.8+](https://img.shields.io/badge/python-3.10%2B%20%7C%20client%203.8%2B-blue)](pyproject.toml)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](#status)
 
@@ -13,7 +13,7 @@ GPU in your own cloud account, or run a robot-use LLM agent through OpenRouter o
   <a href="#quickstart">Quickstart</a> ·
   <a href="#models">Models</a> ·
   <a href="#llm-agents">LLM agents</a> ·
-  <a href="docs/BENCHMARKS.md">Benchmarks</a> ·
+  <a href="https://github.com/playground-systems/playground-serve/blob/main/docs/BENCHMARKS.md">Benchmarks</a> ·
   <a href="#drive-a-robot">Drive a robot</a>
 </p>
 
@@ -23,9 +23,9 @@ east coast to US-NC-1 (p50), 1.34 USD/hr only while a worker runs.
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/model-time-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="docs/assets/model-time-light.svg">
-    <img alt="Bar chart of model time per call, stock against the fast path, on each model's default GPU: MolmoAct2 532.0 to 104.8 ms, Xiaomi-Robotics-1 267.9 to 65.5 ms, ABC-VLA 84.0 to 28.8 ms, Flex-π 318.5 to 131.9 ms, π0.5 75-79 to 31-34 ms, GR00T N1.7 118.4 to 68.5 ms, Cosmos 3 Edge 514.0 to 439.5 ms." src="docs/assets/model-time-light.svg" width="880">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/playground-systems/playground-serve/main/docs/assets/model-time-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/playground-systems/playground-serve/main/docs/assets/model-time-light.svg">
+    <img alt="Bar chart of model time per call, stock against the fast path, on each model's default GPU: MolmoAct2 532.0 to 104.8 ms, Xiaomi-Robotics-1 267.9 to 65.5 ms, ABC-VLA 84.0 to 28.8 ms, Flex-π 318.5 to 131.9 ms, π0.5 75-79 to 31-34 ms, GR00T N1.7 118.4 to 68.5 ms, Cosmos 3 Edge 514.0 to 439.5 ms." src="https://raw.githubusercontent.com/playground-systems/playground-serve/main/docs/assets/model-time-light.svg" width="880">
   </picture>
 </p>
 
@@ -46,14 +46,14 @@ You need a [Runpod](https://www.runpod.io) account with credit and Python 3.10 o
 a Runpod API key, says where to create it and which permissions to pick, and saves it for later commands.
 
 ```bash
-pip install git+https://github.com/playground-systems/playground-serve
+pip install playground-serve
 pgs up pi05_libero   # start the GPU server: about 1 to 2 minutes the first time
 pgs demo             # send a dummy observation, print the actions' shape and the round trip
 pgs down             # keep no worker: GPU billing stops within about a minute
 ```
 
 <p align="center">
-  <img alt="Terminal: pgs up pi05_libero creates a volume and an endpoint in US-NC-1 and is ready after 1:44; pgs demo returns actions of shape (10, 7) with a 91 ms median round trip; pgs down keeps no worker. Real output, trimmed." src="docs/assets/quickstart.svg" width="872">
+  <img alt="Terminal: pgs up pi05_libero creates a volume and an endpoint in US-NC-1 and is ready after 1:44; pgs demo returns actions of shape (10, 7) with a 91 ms median round trip; pgs down keeps no worker. Real output, trimmed." src="https://raw.githubusercontent.com/playground-systems/playground-serve/main/docs/assets/quickstart.svg" width="872">
 </p>
 
 Real output of one session on 2026-11-16, trimmed: a first start on a new volume in US-NC-1 (the checkpoint download
@@ -85,9 +85,9 @@ Alpha (0.1.0). What is true today:
 - The nine LLM agents each answered a tool call with images through OpenRouter; this does not establish robot task success.
 - Experimental (slow or not fully verified): Cosmos 3 Edge and Nano, and FLUX 3 Action (stock path only, 3.2 s per
   call).
-- Fast paths serve only on the GPUs where they were measured ([MODELS.md](MODELS.md)); on any other GPU the model's
+- Fast paths serve only on the GPUs where they were measured ([MODELS.md](https://github.com/playground-systems/playground-serve/blob/main/MODELS.md)); on any other GPU the model's
   stock path serves. Custom checkpoints have not run on a GPU.
-- `pgs` was tested on macOS only. It installs from GitHub; it is not on PyPI yet.
+- `pgs` was tested on macOS only.
 - `pgs run so101` ([below](#drive-a-robot)) has driven a simulated arm, not yet a real one.
 
 ## Models
@@ -106,9 +106,9 @@ Alpha (0.1.0). What is true today:
 | Flex-π | `flex_pi_libero` | LIBERO | A40, 1.22 | 318.5 → 131.9 ms | ran on a GPU |
 | Cosmos 3 (NVIDIA) | `cosmos3_edge_droid`, `cosmos3_nano_droid` | DROID | RTX 5090, 1.89; Nano: A100, 2.99 | 514.0 → 439.5 ms (Edge) | experimental; Nano untested |
 | FLUX 3 Action (Black Forest Labs) | `flux3_action_droid` | DROID | A40, 1.22 | 3180–3228 ms, stock path only | experimental; needs `HF_TOKEN` |
-| LLM agents (through OpenRouter) | `fable_5_2`, `opus_5_5`, `gemini_4_carbon`, `gemini_4_argon`, `gemini_3_8_flash_high`, `gpt_6_astra`, `gpt_6_1_sol`, `muse_wonder_1_0`, `kimi_3_1` | any robot with an embodiment card | CPU (cpu3c, 2 vCPU), 0.072 | seconds to minutes per model call | answered a tool call with images; needs `OPENROUTER_API_KEY` ([MODELS.md](MODELS.md#llm-agents)) |
+| LLM agents (through OpenRouter) | `fable_5_2`, `opus_5_5`, `gemini_4_carbon`, `gemini_4_argon`, `gemini_3_8_flash_high`, `gpt_6_astra`, `gpt_6_1_sol`, `muse_wonder_1_0`, `kimi_3_1` | any robot with an embodiment card | CPU (cpu3c, 2 vCPU), 0.072 | seconds to minutes per model call | answered a tool call with images; needs `OPENROUTER_API_KEY` ([MODELS.md](https://github.com/playground-systems/playground-serve/blob/main/MODELS.md#llm-agents)) |
 
-Model time is the server's `infer_ms` median on the default GPU. [MODELS.md](MODELS.md) has the p90s, other GPUs,
+Model time is the server's `infer_ms` median on the default GPU. [MODELS.md](https://github.com/playground-systems/playground-serve/blob/main/MODELS.md) has the p90s, other GPUs,
 first-start times (up to 7:54 for Flex-π) and the conditions. Licenses differ: FLUX 3 Action is non-commercial,
 MolmoAct2 is meant for research and educational use, and the openpi and ABC-VLA weights carry the Gemma Terms of Use;
 `pgs models` prints each. Flex-π defaults to the A40: the RTX 5090 is 6.7 ms faster (125.2 ms) but had Serverless
@@ -141,26 +141,8 @@ The local server listens only on the same machine and needs to stay running for 
 An agent client supplies an episode ID and an embodiment card describing the robot, cameras and action space; the
 built-in `libero_franka` card is one option. Requests can take seconds to minutes. The worker costs 0.072 USD/hr while
 running (Runpod cpu3c, 2 vCPU, list price); OpenRouter token charges are separate. Each model has answered a tool call
-with images, but that check does not establish task success. See [MODELS.md](MODELS.md#llm-agents) for the nine models,
-prices and setup, and [agent notes](src/playground_serve/families/llm_agent/NOTES.md#wire) for request and reply fields.
-
-## Why it is fast, and still the same model
-
-Robot policy families have stock and, where available, fast paths. **Stock** is the model's official inference code, called as its own server or evaluator
-calls it (openpi's `Policy`, the MolmoAct2 repository's server, and so on). **Fast** is the same model with the same
-weights and precision, the same number of denoising steps and the same inputs; what changes is how the work reaches
-the GPU: CUDA graphs, compiled kernels, per-prompt work done once, image preprocessing on the GPU.
-
-At every start a stored real frame must reproduce the stock path's stored actions within fixed bounds, twice. If it
-does not, or the fast path fails to build, the worker serves stock and says why in its metadata (`path_reason`). For
-π0.5 the fast path's actions differ from stock by 0.0014 on average at the same noise; a new noise draw moves them by
-0.036.
-
-An example: MolmoAct2 on an RTX 4090 spent about 440 of its 516 ms per call launching the small kernels of a 10-step
-flow over 36 blocks. One CUDA graph around that loop, the model card's own setting that the repository's servers
-leave off, gave 151 ms with bit-identical actions; compiling the blocks and preprocessing the images on the GPU brought
-the served call to 104 ms. Each family's `NOTES.md` ([MolmoAct2's](src/playground_serve/families/molmoact2/NOTES.md),
-for example) records what was measured, tried and left out.
+with images, but that check does not establish task success. See [MODELS.md](https://github.com/playground-systems/playground-serve/blob/main/MODELS.md#llm-agents) for the nine models,
+prices and setup, and [agent notes](https://github.com/playground-systems/playground-serve/blob/main/src/playground_serve/families/llm_agent/NOTES.md#wire) for request and reply fields.
 
 ## Why your own account
 
@@ -171,7 +153,7 @@ for example) records what was measured, tried and left out.
   east coast.
 - **Your network path.** `--direct` sends requests straight to the worker's own address, with TLS and a per-boot token,
   instead of through Runpod's gateway: 13.2 ms less at p50 with `hot=True`, from the US east coast to US-CA-2
-  ([trade-offs](docs/USAGE.md#direct-port)).
+  ([trade-offs](https://github.com/playground-systems/playground-serve/blob/main/docs/USAGE.md#direct-port)).
 - **Your bill.** A worker bills only while it runs and stops 5 minutes after the last client leaves (`--idle`); the
   next connect starts one in about a minute. `--warm` keeps one running.
 - **Your checkpoints.** `pgs up pi05_droid@gs://my-bucket/pi05_droid_finetune/30000` serves your fine-tune of any
@@ -185,14 +167,14 @@ the model's 30 Hz, with limits on the robot side: the calibrated joint ranges, a
 arrives, a prompt before the first motion, and a return to the start pose on Ctrl-C. It starts no GPU.
 
 ```bash
-pip install "playground-serve[so101] @ git+https://github.com/playground-systems/playground-serve"   # Python 3.12
+pip install "playground-serve[so101]"   # Python 3.12
 pgs up molmoact2_so101
 pgs run so101 --instruction "put the cube in the bowl" --dry-run   # reads the arm and cameras, moves nothing
 pgs run so101 --instruction "put the cube in the bowl"             # asks, then moves for up to 60 s
 ```
 
 <p align="center">
-  <img alt="Top and side camera views of a simulated yellow SO-101 arm on a table with a cube and a red bowl: the arm unfolds from its rest pose and reaches toward the cube and the bowl." src="docs/assets/so101-sim.gif" width="640">
+  <img alt="Top and side camera views of a simulated yellow SO-101 arm on a table with a cube and a red bowl: the arm unfolds from its rest pose and reaches toward the cube and the bowl." src="https://raw.githubusercontent.com/playground-systems/playground-serve/main/docs/assets/so101-sim.gif" width="640">
 </p>
 
 A simulated SO-101 (`pgs run so101 --sim`, MuJoCo) driven by `molmoact2_so101` on an RTX 4090: the two camera views
@@ -200,36 +182,35 @@ the model gets, 13 s of a 180 s run at about 3x speed. A plumbing check of the u
 task: the rendered scene is not what the model was trained on.
 
 Status: it ran end to end against a simulated arm (`--sim`, MuJoCo) with the real model on an RTX 4090, 180 s at
-29.7 Hz without an error. It has not run on a real SO-101 yet. Setup, units and safety: [docs/RUN.md](docs/RUN.md).
+29.7 Hz without an error. It has not run on a real SO-101 yet. Setup, units and safety: [docs/RUN.md](https://github.com/playground-systems/playground-serve/blob/main/docs/RUN.md).
 
 ## Documentation
 
-- [docs/USAGE.md](docs/USAGE.md): install options, the API key, every command and option, costs, how it works, limits.
-- [MODELS.md](MODELS.md): every entry with its GPU, price, first start, model time, license and checks.
-- [docs/BENCHMARKS.md](docs/BENCHMARKS.md): π0.5's start times, round trips and model time per GPU, with conditions.
-- [docs/WIRE.md](docs/WIRE.md): the wire protocol, for a client in another language.
-- [docs/RUN.md](docs/RUN.md): `pgs run`, the setup of an SO-101 arm, units and safety.
+- [docs/USAGE.md](https://github.com/playground-systems/playground-serve/blob/main/docs/USAGE.md): install options, the API key, every command and option, costs, how it works, limits.
+- [MODELS.md](https://github.com/playground-systems/playground-serve/blob/main/MODELS.md): every entry with its GPU, price, first start, model time, license and checks.
+- [docs/BENCHMARKS.md](https://github.com/playground-systems/playground-serve/blob/main/docs/BENCHMARKS.md): π0.5's start times, round trips and model time per GPU, with conditions.
+- [docs/WIRE.md](https://github.com/playground-systems/playground-serve/blob/main/docs/WIRE.md): the wire protocol, for a client in another language.
+- [docs/RUN.md](https://github.com/playground-systems/playground-serve/blob/main/docs/RUN.md): `pgs run`, the setup of an SO-101 arm, units and safety.
 
 ## Roadmap
 
 - Run the 11 untested entries on a GPU, and bring the fast paths to more GPUs.
 - `pgs run so101` on a real SO-101 arm.
 - A local mode that serves on your own GPU, without Runpod.
-- A PyPI release, so that `pip install playground-serve` works.
 
 ## Contributing
 
-Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has the development setup with uv, the
+Issues and pull requests are welcome. [CONTRIBUTING.md](https://github.com/playground-systems/playground-serve/blob/main/CONTRIBUTING.md) has the development setup with uv, the
 tests and the release check that run on every pull request, and how to add a model family. A family is one folder,
 `src/playground_serve/families/<family>/`, and changes no shared file; its fast path keeps the weights, precision,
 steps and inputs, and must reproduce the stock actions at every start or the worker serves stock. Security problems go
-through [SECURITY.md](SECURITY.md); the code of conduct is [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+through [SECURITY.md](https://github.com/playground-systems/playground-serve/blob/main/SECURITY.md); the code of conduct is [CODE_OF_CONDUCT.md](https://github.com/playground-systems/playground-serve/blob/main/CODE_OF_CONDUCT.md).
 
 ## License and credits
 
-Apache License 2.0 ([LICENSE](LICENSE)). Playground Serve builds on [openpi](https://github.com/Physical-Intelligence/openpi)
+Apache License 2.0 ([LICENSE](https://github.com/playground-systems/playground-serve/blob/main/LICENSE)). Playground Serve builds on [openpi](https://github.com/Physical-Intelligence/openpi)
 by Physical Intelligence (Apache 2.0) and [realtime-vla](https://github.com/dexmal/realtime-vla) by Dexmal (MIT),
 whose Triton kernels run π0.5's fast path. It serves models by Physical Intelligence, Ai2 (MolmoAct2), NVIDIA
 (GR00T N1.7, Cosmos 3), Amazon FAR (ABC-VLA), Xiaomi (Xiaomi-Robotics-1), the Flex-π authors and Black Forest Labs
-(FLUX 3 Action), each under its own license. [NOTICE](NOTICE) lists the third-party code and data; the openpi
+(FLUX 3 Action), each under its own license. [NOTICE](https://github.com/playground-systems/playground-serve/blob/main/NOTICE) lists the third-party code and data; the openpi
 checkpoints are subject to the Gemma Terms of Use.
