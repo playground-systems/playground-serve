@@ -1,0 +1,10 @@
+# The LLM agent worker's Python packages (start.sh installs them; tests/families/test_llm_agent.py needs the first two).
+# inspect-robots and inspect-robots-agent: MIT, Copyright (c) 2026 robocurve, https://github.com/robocurve/inspect-robots
+# (inspect_robots_agent-0.30.0.tar.gz sha256 6631bd808bf5898393f56f545675a5dcd1a54f7878fed5dce1703be339145fea).
+inspect-robots==1.0.0
+inspect-robots-agent==0.30.0
+httpx==0.28.1
+numpy==2.4.6
+pillow==13.0.0
+websockets==17.4
+msgpack==1.2.4

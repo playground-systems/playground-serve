@@ -152,3 +152,23 @@ gives the exact graph path (bit-identical to stock, 37.0 ms).
   for a user in the US (about 90 ms more round trip, estimate). For Cosmos Edge that is still far below the 400 ms the
   5090 saves over the A40, so it stays first there; for Flex-π it saves 6.7 ms, so the A40 is first and `pgs up
   flex_pi_libero --gpu "RTX 5090"` picks the 5090.
+
+## LLM agents (no GPU)
+
+`families/llm_agent/` serves a language model as a robot policy behind the same websocket wire. The agent loop is
+Inspect Robots' LLM agent policy (`inspect-robots-agent`, MIT, a pinned dependency): the model sees the state as text and
+the camera images and calls tools (`move_to` or `move_joints`, `sleep`, `take_pic`, `done`, `give_up`); the server turns
+the targets into the environment's actions. Any provider of that package works: Anthropic, OpenAI, Google, xAI, Groq,
+Mistral, DeepSeek, OpenRouter, and any OpenAI-compatible server by base URL. Each episode starts from an embodiment
+card that the client sends (the robot, its action space, its cameras and keys; built-in: `libero_franka`).
+[NOTES.md](src/playground_serve/families/llm_agent/NOTES.md) has the design, the harnesses compared, the providers'
+test status and the measurements; [docs/WIRE.md](docs/WIRE.md#llm-agents) the request and reply keys.
+
+It has no `spec.py`, so it is not a registry entry and `pgs up` does not create it yet: it runs on a CPU worker without
+a volume, which the launcher does not make. Run it on any machine with the packages of its `requirements.txt`:
+
+```bash
+D=src/playground_serve
+PYTHONPATH=$D/families/llm_agent:$D/families/common:$D/worker ANTHROPIC_API_KEY=... \
+  PGS_AGENT_MODEL=anthropic/claude-haiku-5-5 python $D/families/llm_agent/serve.py --port 8000
+```
