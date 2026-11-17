@@ -40,6 +40,10 @@ def certificate():
                         "-days", "365", "-subj", "/CN=playground-serve"], check=True, capture_output=True, timeout=60)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(cert, key)
+        # No TLS 1.3 session tickets: clients never resume a session, and tickets arriving just after the handshake
+        # stalled 13 of 200 upgrades of websockets 13.1's threading client (the last release for Python 3.8), which
+        # reads and writes the socket from two threads; 0 of 200 without them.
+        context.num_tickets = 0
         with open(cert) as f:
             return f.read(), context
 
