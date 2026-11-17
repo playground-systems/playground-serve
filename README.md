@@ -5,13 +5,14 @@
 [![Python: pgs 3.10+, client 3.8+](https://img.shields.io/badge/python-3.10%2B%20%7C%20client%203.8%2B-blue)](pyproject.toml)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](#status)
 
-**Low-cost, open source inference for robot policies (VLAs). One command serves π0.5, MolmoAct2, GR00T and more from
-a serverless GPU in your own cloud account.** `pgs up pi05_libero` starts the GPU, serves the vision-language-action
-model over a websocket, and scales to zero when your robot stops calling it.
+**Open source serving for robot policies and LLM agents.** Serve π0.5, MolmoAct2, GR00T and more on a serverless
+GPU in your own cloud account, or run a robot-use LLM agent through OpenRouter on a CPU worker.
+`pgs up pi05_libero` starts a vision-language-action model over a websocket and scales to zero when your robot stops calling it.
 
 <p align="center">
   <a href="#quickstart">Quickstart</a> ·
   <a href="#models">Models</a> ·
+  <a href="#llm-agents">LLM agents</a> ·
   <a href="docs/BENCHMARKS.md">Benchmarks</a> ·
   <a href="#drive-a-robot">Drive a robot</a>
 </p>
@@ -28,10 +29,12 @@ east coast to US-NC-1 (p50), 1.34 USD/hr only while a worker runs.
   </picture>
 </p>
 
-- **One command, no image to build.** `pgs up MODEL` creates the endpoint and a network volume in your account, prints
-  the price before it creates anything, and waits until the model serves. `pgs down` stops the GPU bill.
-- **Eight model families, 23 entries:** openpi π0 and π0.5, MolmoAct2, GR00T N1.7, ABC-VLA, Xiaomi-Robotics-1,
+- **One command, no image to build.** `pgs up MODEL` creates an endpoint in your account, prints the price before it creates
+  anything, and waits until the model serves. Robot policies also use a network volume; LLM agents do not.
+  `pgs down` stops the worker bill.
+- **Eight robot model families, 23 entries:** openpi π0 and π0.5, MolmoAct2, GR00T N1.7, ABC-VLA, Xiaomi-Robotics-1,
   Flex-π, Cosmos 3 and FLUX 3 Action.
+- **Nine LLM agents:** serve language models through OpenRouter with a CPU worker that converts tool calls into robot actions.
 - **Faster, and still the same model.** Each fast path keeps the weights, precision, steps and inputs, and must
   reproduce the stock actions at every start or the worker serves stock: model calls 1.2x to 5.1x faster.
 - **Your account, your choices:** the GPU, the region, a direct port past the gateway, your own checkpoints.
@@ -79,6 +82,7 @@ Alpha (0.1.0). What is true today:
 - 12 of the 23 model entries have served real actions on a Runpod GPU. The other 11 are registered and untested:
   `pi0_droid`, `pi0_fast_droid`, the five ALOHA entries, three more GR00T N1.7 suites and Cosmos 3 Nano. `pgs models`
   says which is which.
+- The nine LLM agents each answered a tool call with images through OpenRouter; this does not establish robot task success.
 - Experimental (slow or not fully verified): Cosmos 3 Edge and Nano, and FLUX 3 Action (stock path only, 3.2 s per
   call).
 - Fast paths serve only on the GPUs where they were measured ([MODELS.md](MODELS.md)); on any other GPU the model's
@@ -111,9 +115,27 @@ MolmoAct2 is meant for research and educational use, and the openpi and ABC-VLA 
 stock only in Europe on 2026-11-16, which costs a robot in the US more round trip than that; `--gpu "RTX 5090"`
 picks it.
 
+## LLM agents
+
+Serve one of nine robot-use language models through OpenRouter. A Runpod CPU worker runs the agent loop: the model
+receives camera images and robot state, calls motion tools, and the worker converts targets into action chunks using an
+embodiment card. The LLM itself runs at its provider. The same websocket protocol serves both agents and robot policies.
+
+```bash
+export OPENROUTER_API_KEY=...  # your OpenRouter key
+pgs up opus_5_5                # start the CPU worker and print its websocket URL
+pgs down opus_5_5              # stop the worker when finished
+```
+
+An agent client supplies an episode ID and an embodiment card describing the robot, cameras and action space; the
+built-in `libero_franka` card is one option. Requests can take seconds to minutes. The worker costs 0.072 USD/hr while
+running (Runpod cpu3c, 2 vCPU, list price); OpenRouter token charges are separate. Each model has answered a tool call
+with images, but that check does not establish task success. See [MODELS.md](MODELS.md#llm-agents) for the nine models,
+prices and setup, and [agent notes](src/playground_serve/families/llm_agent/NOTES.md#wire) for request and reply fields.
+
 ## Why it is fast, and still the same model
 
-Every family has two paths. **Stock** is the model's official inference code, called as its own server or evaluator
+Robot policy families have stock and, where available, fast paths. **Stock** is the model's official inference code, called as its own server or evaluator
 calls it (openpi's `Policy`, the MolmoAct2 repository's server, and so on). **Fast** is the same model with the same
 weights and precision, the same number of denoising steps and the same inputs; what changes is how the work reaches
 the GPU: CUDA graphs, compiled kernels, per-prompt work done once, image preprocessing on the GPU.
@@ -143,7 +165,7 @@ for example) records what was measured, tried and left out.
   next connect starts one in about a minute. `--warm` keeps one running.
 - **Your checkpoints.** `pgs up pi05_droid@gs://my-bucket/pi05_droid_finetune/30000` serves your fine-tune of any
   openpi config (untested on a GPU so far).
-- **Your data.** Observations go from your machine to a worker in your account; the API key goes only to Runpod.
+- **Your data.** Robot policy observations go from your machine to a worker in your account. LLM agent observations also go to OpenRouter and the model provider; the OpenRouter key is stored in your Runpod endpoint settings.
 
 ## Drive a robot
 
