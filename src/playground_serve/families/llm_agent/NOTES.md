@@ -69,6 +69,11 @@ A server whose features say `"agent": true` keeps state per episode. Add to each
   action layout the reply comes in. Without it the server looks for a built-in card whose keys the request has.
 - `max_steps` (optional): the episode's step limit, which the model is told.
 
+Playground Bench's custom environments use their own shape (its docs/cloud/CUSTOM.md, section 10): the observation
+nested as `images` and `state` maps, and with an episode's first request `embodiment_card` (their card as JSON) and
+`reset: true`. The server takes it too (`llm_card.from_env_card`: an absolute pose or joint interface, kind `same`) and
+says `"embodiment_card": true` in its metadata. Each `reset` starts a new episode on the connection.
+
 The reply's `actions` has the card's `chunk` rows. Its `agent` map holds the episode's calls, tokens, USD, model seconds,
 `finished` once the agent stopped, and `turns`, the transcript's new messages without images. A request can take as
 long as a model call (seconds to minutes): wait for the reply as for any other; the server answers pings meanwhile. A

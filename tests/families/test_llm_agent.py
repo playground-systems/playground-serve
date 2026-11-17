@@ -173,9 +173,9 @@ def test_episodes_by_id_and_by_connection():
     assert set(pol.sessions) == {"e:a", "e:b"} and len(fake.requests) == 2
     anon = Libero(episode=None)
     pol.infer(anon.request(), "c3")
-    assert "c:c3:pick up the black bowl" in pol.sessions
+    assert "c:c3:0:pick up the black bowl" in pol.sessions
     pol.close_connection("c3")
-    assert "c:c3:pick up the black bowl" not in pol.sessions
+    assert "c:c3:0:pick up the black bowl" not in pol.sessions
 
 
 def test_warm_up_request_calls_no_model():
@@ -201,7 +201,7 @@ def test_settings():
         llm_session.Settings.from_env({"PGS_AGENT_MODEL": "openai/gpt-5.5"})
     assert llm_session.Settings.from_env({"PGS_AGENT_MODEL": "openai/gpt-5.5", "PGS_AGENT_MAX_USD_EPISODE": "none"}).max_usd_episode is None
     with pytest.raises(ValueError, match="https"):
-        llm_session.Settings.from_env({"PGS_AGENT_BASE_URL": "http://10.0.0.2/v1"})
+        llm_session.Settings.from_env({"PGS_AGENT_BASE_URL": "http://example.com/v1"})
     s = llm_session.Settings.from_env({"ANTHROPIC_API_KEY": "sk-secret", "HF_TOKEN": "hf_x"})
     assert set(s.keys) == {"ANTHROPIC_API_KEY"} and "sk-secret" not in json.dumps(s.public())
 
@@ -221,6 +221,46 @@ def test_a_provider_failure_fails_the_request():
     pol = serve.AgentPolicy(settings, lambda s: llm_session.make_policy(s, transport=deny))
     with pytest.raises(llm_session.AgentFailure, match="rejected"):
         pol.infer(Libero().request(), "c1")
+
+
+# ------------------------------------------------------------------ custom environments' cards
+PANDA_ENV_CARD = {
+    "version": 1, "environment": {"id": "env_1", "revision": 3, "hash": "abc", "name": "mug shelf"},
+    "task": {"number": 1, "instruction": "put the mug on the shelf", "seed": 7, "episode": 0},
+    "robot": {"name": "panda", "arms": 1, "arm": "Franka Panda, 7 joints", "gripper": "Franka hand", "note": ""},
+    "frame": "world: metres, z up, the table top at z = 0.75", "controlHz": 20,
+    "action": {"layout": "eef_abs_pose_rot6d", "size": 10, "labels": ["x", "y", "z", "r00", "r10", "r20", "r01", "r11", "r21", "gripper"],
+               "low": [0.15, -0.55, 0.755, -1, -1, -1, -1, -1, -1, 0], "high": [1.05, 0.55, 1.45, 1, 1, 1, 1, 1, 1, 1],
+               "maxStep": [0.025, 0.025, 0.025, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.25], "chunk": "the rows run in order"},
+    "observation": {"cameras": [{"name": "agentview", "width": 64, "height": 64, "about": "the reference camera"},
+                                {"name": "wrist", "width": 64, "height": 64, "about": "on the hand"}],
+                    "state": [{"name": "eef_state", "size": 10, "labels": []}, {"name": "gripper_qpos", "size": 2, "labels": []}],
+                    "prompt": "the task's instruction"},
+    "limits": {"maxSteps": 1100, "seconds": 60}, "success": ["the mug rests on the shelf"],
+}
+
+
+def test_custom_environment_card_and_reset():
+    card = llm_card.from_env_card(json.dumps(PANDA_ENV_CARD))
+    assert card.kind == "same" and card.chunk == 10 and card.max_steps == 1100 and card.native["state"] == "state/eef_state"
+    assert "the mug rests on the shelf" in card.docs and card.cameras == {"agentview": "images/agentview", "wrist": "images/wrist"}
+    pol, fake = policy(turns=[{"tool": "move_to", "arguments": {"targets": {"z": 0.9}, "note": "lower"}}] * 4)
+    rng = np.random.default_rng(0)
+    pose = np.array([0.5, 0.0, 1.0, 1, 0, 0, 0, -1, 0, 0.0])
+
+    def req(first=False):
+        r = {"images": {c: rng.integers(1, 255, (64, 64, 3), dtype=np.uint8) for c in ("agentview", "wrist")},
+             "state": {"eef_state": pose.copy(), "gripper_qpos": np.array([0.04, -0.04])}, "prompt": "put the mug on the shelf"}
+        return {**r, "embodiment_card": json.dumps(PANDA_ENV_CARD), "reset": True} if first else r
+
+    out = pol.infer(req(True), "c1")
+    assert out["actions"].shape == (10, 10) and np.all(np.diff(out["actions"][:, 2]) <= 0)  # absolute targets going down
+    body = fake.requests[0]
+    assert "Environment step budget" in body["system"][0]["text"] and "the mug rests on the shelf" in body["system"][0]["text"]
+    assert "state[gripper_qpos]" in json.dumps(body["messages"])
+    pol.infer(req(), "c1")
+    pol.infer(req(True), "c1")  # reset: a new episode on the same connection
+    assert sorted(pol.sessions) == ["c:c1:1:put the mug on the shelf", "c:c1:2:put the mug on the shelf"]
 
 
 # ------------------------------------------------------------------ over the wire
@@ -253,3 +293,16 @@ def test_bundle_ships_the_family():
     assert {"serve.py", "llm_card.py", "llm_session.py", "llm_pricing.py", "cards.json", "requirements.txt", "start.sh",
             "pgs_server.py", "pgs_msgpack_numpy.py", "server_decode.py", "health.py"} <= set(files)
     assert len(bundle.pack(files)) < 60_000
+
+
+def test_custom_environment_two_arm_card():
+    labels = [f"left_joint{j}" for j in range(1, 7)] + ["left_gripper"] + [f"right_joint{j}" for j in range(1, 7)] + ["right_gripper"]
+    env = {**PANDA_ENV_CARD, "controlHz": 50,
+           "action": {"layout": "aloha_joints", "size": 14, "labels": labels, "low": [-3.2] * 6 + [0] + [-3.2] * 6 + [0],
+                      "high": [3.2] * 6 + [1] + [3.2] * 6 + [1], "maxStep": None, "chunk": "the first 25 rows run, one per control step"},
+           "observation": {"cameras": [{"name": "cam_high", "width": 224, "height": 224, "about": ""}],
+                           "state": [{"name": "joint_pos", "size": 14, "labels": labels}], "prompt": ""}}
+    card = llm_card.from_env_card(env)
+    assert card.agent["control_mode"] == "joint_pos" and card.chunk == 25 and card.native["state_field"] == "joint_pos"
+    info = llm_session.embodiment_info(card, {"cam_high": (224, 224)})
+    assert info.action_space.semantics.control_mode == "joint_pos" and info.control_hz == 50

@@ -12,6 +12,9 @@ Request keys, besides the observation in the card's own keys (its cameras, its n
                   reconnects continues its episode. Without it, an episode is the connection and its prompt: a new
                   prompt on the same connection starts a new episode.
     "max_steps"   optional: the episode's step limit, which the model is told.
+    "embodiment_card", "reset"  a custom environment's card and episode start (Playground Bench's docs/cloud/CUSTOM.md,
+                  section 10): the card in its own shape (llm_card.from_env_card), sent with an episode's first request
+                  together with reset: true. Each reset starts a new episode on the connection.
 A request whose images are all black is a warm-up: it gets a holding chunk, and no episode starts.
 
 Reply: "actions" float32 (chunk, action_size) in the card's native layout, and "agent": {episode, card, model, calls,
@@ -81,12 +84,15 @@ class AgentPolicy:
         self.lock = threading.Lock()
         self.ledger = llm_session.Ledger()
         self.metadata = {"playground_serve": {"agent": True, "agent_settings": settings.public()},
-                         "image_mode": "jpeg", "image_size": "native"}
+                         "embodiment_card": True, "image_mode": "jpeg", "image_size": "native"}
         self.last_card: dict[str, llm_card.Card] = {}
+        self.resets: dict[str, int] = {}  # connection -> episodes started by reset: true
 
     def _card(self, request: dict, conn: str) -> llm_card.Card:
         given = request.get("embodiment")
-        if given is not None:
+        if request.get("embodiment_card") is not None:
+            card = llm_card.from_env_card(request["embodiment_card"])
+        elif given is not None:
             card = llm_card.load(given)
         else:
             card = self.last_card.get(conn) or llm_card.guess(request)
@@ -105,7 +111,9 @@ class AgentPolicy:
             return {"actions": rows.astype(np.float32), "agent": {"warm_up": True, "card": card.name}}
         episode = request.get("episode")
         prompt = str(llm_card.lookup(request, card.prompt) or "")
-        key = f"e:{episode}" if episode not in (None, "") else f"c:{conn}:{prompt}"
+        if request.get("reset") is True:
+            self.resets[conn] = self.resets.get(conn, 0) + 1
+        key = f"e:{episode}" if episode not in (None, "") else f"c:{conn}:{self.resets.get(conn, 0)}:{prompt}"
         with self.lock:
             self._expire()
             session = self.sessions.get(key)
@@ -128,6 +136,7 @@ class AgentPolicy:
             for k in [k for k in self.sessions if k.startswith(f"c:{conn}:")]:
                 del self.sessions[k]
             self.last_card.pop(conn, None)
+            self.resets.pop(conn, None)
 
 
 class AgentServer(pgs_server.Server):

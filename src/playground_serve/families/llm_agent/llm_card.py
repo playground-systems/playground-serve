@@ -13,8 +13,15 @@ row must be, and how the server turns the agent's targets into those rows. Two n
   closed), and the server servoes each target with a proportional controller, then holds the last target until the
   hand arrives or stops making progress before it asks the model again.
 
-The card's fields are listed in CARD_FIELDS and in docs/AGENTS.md. A card is checked with `load`; any problem raises
-CardError with the field named.
+The card's fields are listed in CARD_FIELDS and in NOTES.md. A card is checked with `load`; any problem raises CardError
+with the field named.
+
+Playground Bench's custom environments send their own card (EmbodimentCard, version 1, in its docs/cloud/CUSTOM.md
+section 10: environment, task, robot, frame, controlHz, action {layout, size, labels, low, high, maxStep, chunk},
+observation {cameras, state, prompt}, limits, success) as "embodiment_card", with the observation nested as
+{"images": {camera: image}, "state": {name: vector}, "prompt": text}. `from_env_card` turns it into a card of this
+format: kind "same" (the environment takes absolute targets), the state entry of the action's size as the reference,
+the others as extra state fields, and its words (robot, frame, cameras, success checks) as the docs.
 """
 
 from __future__ import annotations
@@ -30,7 +37,8 @@ import numpy as np
 CARD_VERSION = 1
 HERE = pathlib.Path(__file__).resolve().parent
 BUILTIN_FILE = HERE / "cards.json"
-CARD_FIELDS = ("card", "name", "morphology", "docs", "control_hz", "chunk", "prompt", "cameras", "agent", "native")
+CARD_FIELDS = ("card", "name", "morphology", "docs", "control_hz", "chunk", "prompt", "cameras", "agent", "native", "max_steps")
+LAYOUTS = {"eef_abs_pose_rot6d": "eef_abs_pose", "aloha_joints": "joint_pos"}  # a custom environment's action layouts
 ROT6D_LABELS = ("r00", "r10", "r20", "r01", "r11", "r21")
 
 
@@ -50,6 +58,7 @@ class Card:
     native: dict[str, Any]
     morphology: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
+    max_steps: int | None = None  # the episode's step limit, when the card says it
 
     @property
     def action_size(self) -> int:
@@ -134,9 +143,60 @@ def load(card: Any) -> Card:
             _need(isinstance(d.get(key), (int, float)), f"native.eef_delta.{key} must be a number")
     for key, value in native.get("extra_state", {}).items():
         _slice(value, f"native.extra_state.{key}")
+    for key, value in native.get("extra_keys", {}).items():
+        _need(isinstance(value, str), f"native.extra_keys.{key} must be a request key")
+    max_steps = card.get("max_steps")
+    _need(max_steps is None or (isinstance(max_steps, int) and max_steps > 0), "max_steps must be a positive integer")
     return Card(name=card["name"], docs=str(card.get("docs") or ""), control_hz=float(hz), chunk=int(chunk),
                 prompt=card["prompt"], cameras=dict(cameras), agent=dict(agent), native=dict(native),
-                morphology=str(card.get("morphology") or ""), raw=card)
+                morphology=str(card.get("morphology") or ""), raw=card, max_steps=max_steps)
+
+
+def from_env_card(env: Any) -> Card:
+    """A custom environment's EmbodimentCard (a map or its JSON text) as a card of this format."""
+    if isinstance(env, (bytes, bytearray)):
+        env = env.decode()
+    if isinstance(env, str):
+        try:
+            env = json.loads(env)
+        except json.JSONDecodeError as e:
+            raise CardError(f"embodiment_card is not JSON: {e}") from None
+    _need(isinstance(env, dict) and env.get("version") == 1, "embodiment_card must be an object with version 1")
+    a, o = env.get("action") or {}, env.get("observation") or {}
+    mode = LAYOUTS.get(a.get("layout"))
+    _need(mode is not None, f"embodiment_card.action.layout must be one of {', '.join(LAYOUTS)}")
+    size = a.get("size")
+    states = o.get("state") or []
+    refs = [s["name"] for s in states if s.get("size") == size]
+    if len(refs) > 1:
+        refs = [n for n in refs if n.startswith("eef" if mode == "eef_abs_pose" else "joint")] or refs
+    _need(len(refs) == 1, f"embodiment_card.observation.state needs exactly one entry of the action's size ({size})")
+    chunk_text = str(a.get("chunk") or "")
+    words = chunk_text.split()
+    chunk = next((int(w) for i, w in enumerate(words) if w.isdigit() and i > 0 and words[i - 1] == "first"), 10)
+    robot, task, limits = env.get("robot") or {}, env.get("task") or {}, env.get("limits") or {}
+    cams = o.get("cameras") or []
+    docs = "\n".join(x for x in [
+        f"Robot: {robot.get('name', '')}, {robot.get('arms', 1)} arm(s): {robot.get('arm', '')}; gripper: {robot.get('gripper', '')}. {robot.get('note', '')}".strip(),
+        f"Frame: {env.get('frame', '')}." if env.get("frame") else "",
+        f"Actions: {chunk_text}." if chunk_text else "",
+        "Cameras: " + "; ".join(f"{c.get('name')} ({c.get('width')} x {c.get('height')}): {c.get('about', '')}" for c in cams) + "." if cams else "",
+        "Success is measured at the end, by these checks: " + "; ".join(map(str, env.get("success") or [])) + "." if env.get("success") else "",
+        f"The episode lasts at most {limits.get('maxSteps')} control steps ({limits.get('seconds')} s)." if limits.get("maxSteps") else "",
+    ] if x)
+    environment = env.get("environment") or {}
+    card = {
+        "card": CARD_VERSION, "name": f"{environment.get('name') or 'environment'} r{environment.get('revision', '')}".strip(),
+        "morphology": str(robot.get("name") or ""), "docs": docs, "control_hz": env.get("controlHz"), "chunk": max(1, min(200, chunk)),
+        "prompt": "prompt", "cameras": {c["name"]: f"images/{c['name']}" for c in cams},
+        "agent": {"control_mode": mode, "rotation_repr": "rot6d" if mode == "eef_abs_pose" else "none", "gripper": "continuous",
+                  "frame": "world" if mode == "eef_abs_pose" else "base", "labels": a.get("labels"), "low": a.get("low"),
+                  "high": a.get("high"), "max_step": a.get("maxStep")},
+        "native": {"kind": "same", "state": f"state/{refs[0]}", "state_field": refs[0], "action_size": size,
+                   "extra_keys": {s["name"]: f"state/{s['name']}" for s in states if s["name"] != refs[0]}},
+        **({"max_steps": int(limits["maxSteps"])} if isinstance(limits.get("maxSteps"), int) else {}),
+    }
+    return load(card)
 
 
 _BUILTIN: dict[str, dict] | None = None

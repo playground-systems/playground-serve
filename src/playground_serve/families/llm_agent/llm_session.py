@@ -107,7 +107,7 @@ def make_policy(s: Settings, transport: Any = None):
                           transport=transport, env=dict(s.keys), transcript_echo=False)
 
 
-def embodiment_info(card: Card, sizes: Mapping[str, tuple[int, int]]):
+def embodiment_info(card: Card, sizes: Mapping[str, tuple[int, int]], extra: Mapping[str, tuple[int, ...]] | None = None):
     """The card's agent interface as Inspect Robots' EmbodimentInfo, with each camera's size from the first request."""
     from inspect_robots.embodiment import EmbodimentInfo
     from inspect_robots.spaces import ActionSemantics, Box, CameraSpec, ObservationSpace, StateField, StateSpec
@@ -120,7 +120,7 @@ def embodiment_info(card: Card, sizes: Mapping[str, tuple[int, int]]):
                                         gripper=a.get("gripper", "none"), frame=a.get("frame", "base"),
                                         dim_labels=tuple(a["labels"]),
                                         max_step=None if step is None else tuple(None if v is None else float(v) for v in step)))
-    fields = [StateField(k, shape) for k, shape in state_shapes(card).items()]
+    fields = [StateField(k, shape) for k, shape in {**state_shapes(card), **(extra or {})}.items()]
     cams = tuple(CameraSpec(name, *sizes[name]) for name in card.cameras if name in sizes)
     return EmbodimentInfo(name=card.name, action_space=box, observation_space=ObservationSpace(cameras=cams, state=StateSpec(tuple(fields))),
                           control_hz=card.control_hz, is_simulated=True, docs=card.docs or None, morphology=card.morphology or None,
@@ -139,6 +139,16 @@ def state_shapes(card: Card) -> dict[str, tuple[int, ...]]:
     for k, (s, e) in card.native.get("extra_state", {}).items():
         shapes[k] = (e - s,)
     return shapes
+
+
+def extra_shapes(card: Card, request: dict) -> dict[str, tuple[int, ...]]:
+    """The shapes of the card's extra_keys state fields, read from a request."""
+    out = {}
+    for k, key in card.native.get("extra_keys", {}).items():
+        v = llm_card.lookup(request, key)
+        if v is not None:
+            out[k] = tuple(np.asarray(v).reshape(-1).shape)
+    return out
 
 
 class Driver:
@@ -167,8 +177,8 @@ class Driver:
         opening = float(np.clip((f[0] - f[-1]) / d["finger_full"], 0, 1)) if len(f) > 1 else float(np.clip(f[0] / d["finger_full"], 0, 1))
         return p, R, opening
 
-    def agent_state(self, x: np.ndarray) -> dict[str, np.ndarray]:
-        """The agent's state fields from the native state vector."""
+    def agent_state(self, x: np.ndarray, request: dict | None = None) -> dict[str, np.ndarray]:
+        """The agent's state fields from the native state vector (and the request, for the card's extra_keys)."""
         out: dict[str, np.ndarray] = {}
         if self.card.kind == "same":
             out[reference_field(self.card)] = x[: len(self.card.agent["labels"])].copy()
@@ -179,6 +189,10 @@ class Driver:
             out["gripper_qpos"] = x[slice(*self.d["state_fingers"])].copy()
         for k, (s, e) in self.card.native.get("extra_state", {}).items():
             out[k] = x[s:e].copy()
+        for k, key in self.card.native.get("extra_keys", {}).items():
+            v = llm_card.lookup(request or {}, key)
+            if v is not None:
+                out[k] = np.asarray(v, dtype=np.float64).reshape(-1)
         return out
 
     def load(self, targets: list[np.ndarray]) -> None:
@@ -291,7 +305,7 @@ class Session:
             img = llm_card.image(llm_card.lookup(request, key))
             if img is not None:
                 images[name] = img
-        return Observation(images=images, state=self.driver.agent_state(x), instruction=self.instruction,
+        return Observation(images=images, state=self.driver.agent_state(x, request), instruction=self.instruction,
                            extra={"env_step": self.steps})
 
     def _start(self, request: dict, obs) -> None:
@@ -299,8 +313,8 @@ class Session:
         from inspect_robots.task import TaskEnvelope
 
         self.policy = self.factory(self.settings)
-        self.policy.bind(embodiment_info(self.card, {k: v.shape[:2] for k, v in obs.images.items()}))
-        steps = request.get("max_steps")
+        self.policy.bind(embodiment_info(self.card, {k: v.shape[:2] for k, v in obs.images.items()}, extra_shapes(self.card, request)))
+        steps = request.get("max_steps") or self.card.max_steps
         if isinstance(steps, (int, np.integer)) and steps > 0:
             self.policy.bind_task(TaskEnvelope(name=self.card.name, max_steps=int(steps)))
         self.policy.reset(Scene(id=self.key, instruction=self.instruction))
