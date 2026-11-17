@@ -1,8 +1,10 @@
 # LLM agent family
 
 A language model as a robot policy, behind the same websocket wire as every other Playground Serve model. It needs no
-GPU. `serve.py` is the server, `llm_session.py` one episode, `llm_card.py` the embodiment cards, `llm_pricing.py` the
-prices and caps, `llm_fake.py` the recorded-response provider for tests and dry runs, and `cards.json` the built-in cards.
+GPU. The agent models are exactly nine, each a registry entry (`spec.py`, from `llm_models.py`), all reached through
+OpenRouter with one key, `OPENROUTER_API_KEY`. `serve.py` is the server, `llm_session.py` one episode, `llm_models.py`
+the nine and the OpenRouter request settings, `llm_card.py` the embodiment cards, `llm_pricing.py` the prices and caps,
+`llm_fake.py` the recorded-response provider for tests and dry runs, and `cards.json` the built-in cards.
 
 ## The harness: Inspect Robots' agent policy
 
@@ -18,10 +20,9 @@ repository). It is a dependency, pinned in `requirements.txt`, not a copy: nothi
 - Each observation as text: the labelled state, the setpoint the commands hold, the readback's offset from it, how much
   of the last motion played; plus the camera images (PNG), all of them or on request.
 - A model layer with one interface (chat-format messages with images in, text and tool calls out, usage reported) and
-  one client per wire: Anthropic Messages (with thinking-block replay and prompt caching), OpenAI Chat Completions,
-  OpenAI Responses, Google's Interactions API and Google's Live API. Providers by `provider/model` prefix: anthropic,
-  openai, google, x-ai, groq, mistralai, deepseek, thinkingmachines; any OpenAI-compatible server through a base URL
-  (vLLM, Ollama, Together, Fireworks, OpenRouter); OpenRouter as the fallback for any model id.
+  one client per wire. This family uses one of them: Chat Completions at OpenRouter's base URL. The package's other
+  clients (Anthropic Messages, OpenAI Responses, Google's wires) and its provider prefixes stay inside the pinned
+  dependency, unused; the settings cannot reach them (the model must be one of the nine, the base URL is fixed).
 - A call budget per trial, retries with backoff, refusal and truncation handling.
 
 What this family adds: the openpi wire, sessions per episode, the embodiment card and the conversion of the agent's
@@ -42,7 +43,7 @@ Open-source harnesses read (2026-11-16):
 
 | Project | License | Actions | Providers | Taken |
 |---|---|---|---|---|
-| inspect-robots-agent | MIT | tools over the embodiment's spaces | its own clients for five wires, prefixes, base URL, OpenRouter | the whole loop, as a dependency |
+| inspect-robots-agent | MIT | tools over the embodiment's spaces | its own clients for five wires; OpenRouter by base URL | the whole loop, as a dependency |
 | inspect-robots-capx (CaP-X, capgym/cap-x) | MIT (CaP-X); the plugin's README states none (the repo is MIT) | code over perception and control primitives | OpenAI-compatible proxy | nothing yet: a later mode once perception servers exist |
 | Code as Policies (google-research) | Apache-2.0 (monorepo) | hierarchical generated code | OpenAI completions | the idea only; frozen since 2024 |
 | VoxPoser | MIT | code that builds value maps, then waypoints and a controller | OpenAI | the waypoint-plus-controller split |
@@ -83,10 +84,10 @@ key, an outage) is the server's error frame.
 ## Memory, images and caching
 
 Each episode is one conversation, append-only: `image_horizon` is off by default, so no earlier message is edited.
-That keeps every thinking block valid on the models that check the history (Claude Opus 5.5, Sonnet 5.5, Haiku 5.5
-and Fable 5.2 reject replayed thinking after an edit on accounts made after 2026-08-31) and keeps the prompt cache
-warm (the Messages client marks the system prompt and the newest image for caching). At LIBERO's 224 x 224 images the
-whole episode stays far below any context limit: the real episode below used 37K prompt tokens over six calls.
+That keeps every replayed reasoning block valid and the prompt cache warm (for Fable 5.2 and Opus 5.5 the request
+carries `cache_control`, `llm_models.py`). At
+LIBERO's 256-pixel images a whole episode stays far below any context limit (the measured episodes below used 40K to
+420K prompt tokens, most of them cache reads).
 `PGS_AGENT_IMAGE_HORIZON=2` stubs older frames for a long episode on a wire that has no such check.
 
 ## Embodiment cards and the native conversion
@@ -113,88 +114,97 @@ refused with the reason. Checked against that repository's own episode runner (`
 over the websocket: one episode per reset, absolute rows played as sent, the step budget and the success checks in the
 prompt.
 
+## OpenRouter (read 2026-11-17)
+
+From openrouter.ai/docs (API reference, reasoning tokens, prompt caching, provider routing, errors, usage accounting):
+
+- One endpoint, `https://openrouter.ai/api/v1/chat/completions`, the Chat Completions shape, a bearer key. The model is
+  the slug (`anthropic/claude-opus-5.5`). Images are `image_url` parts with data URLs; tools are Chat Completions
+  functions.
+- Reasoning: one `reasoning: {effort}` object, mapped to each provider's own setting (Anthropic's thinking budget,
+  OpenAI's effort, Gemini's thinking level). `OpenRouterTransport` moves the agent's `reasoning_effort` there and sets
+  each model's own effort (`high` for Gemini 3.8 Flash, `medium` for the rest).
+- Caching: the other providers cache a repeated prompt on their own where they cache at all; Anthropic models need
+  `cache_control`, sent at the top level for Fable 5.2 and Opus 5.5.
+- Cost: each response's `usage.cost` is the USD charged for that call (credits), reasoning and cache included. The
+  server's caps and each reply's `usd` use that number (`usd_source: "reported"`); the list prices in `llm_models.py`
+  are used only when a response lacks it.
+- Routing: `provider: {require_parameters: true, data_collection: "deny", allow_fallbacks: true}`, so a provider that
+  ignores tools or images, or keeps prompts, is never chosen. None of the nine lists `parallel_tool_calls`, so it is
+  not sent; Gemini models take `max_tokens`, so that is the field set.
+- Errors: 401 the key, 402 no credit, 403 moderation, 408 timeout, 429 rate limit, 502 the provider failed, 503 no
+  provider meets the request; an error can also arrive inside a 200 body. The agent retries with backoff; what is left
+  fails the request, named by its class (`credit: ...`, `key: ...`), as the server's error frame.
+
+The Kimi entry: the list names "Kimi 3.1"; OpenRouter lists one Kimi 3.1 model, Kimi K3.1 Pro
+(`moonshotai/kimi-k3.1-pro`), and that is what `kimi_3_1` serves. Its title stays "Kimi 3.1" and `pgs info kimi_3_1`
+shows the slug.
+
 ## Keys and logs
 
-The settings come from the endpoint's environment only; a request cannot change the model, the key or the base URL.
-Each episode's policy gets a mapping with the provider keys, so a key goes only in that provider's request header (or
-to the endpoint's own base URL, which must be https). The log has counts: no prompt, image, note or key; httpx's
+The settings come from the endpoint's environment only (`PGS_AGENT_MODEL`, one of the nine, and the caps); a request
+cannot change the model, the key or the base URL. The episode's policy gets a mapping with `OPENROUTER_API_KEY` only,
+so the key goes only in the request header to OpenRouter. The log has counts: no prompt, image, note or key; httpx's
 request lines are off. Each reply's `agent.turns` gives the client the episode's new messages without images.
 
-Tokens are counted by `Meter`, an httpx transport around the agent's: it reads the usage object of each answered
-request on every HTTP wire (inspect-robots-agent 0.30.0 keeps no usage on the Responses wire, so its own totals would
-miss OpenAI's tokens), and the USD caps use those counts.
+Tokens and cost are counted by `Meter`, an httpx transport around the agent's: it reads the usage object (and its
+`cost`) of each answered request, and the USD caps use those numbers.
 
-## Measured (this Mac, 2026-11-16)
+## Measured (this Mac, 2026-11-17)
 
-LIBERO-Spatial task 1 ("pick up the black bowl between the plate and the ramekin and place it on the plate"), 220 steps,
-three episodes per model (vla-eval's first three initial states), effort `medium`, the generic card and notes above,
-through the engine's native runtime and its openpi proxy. Success is LIBERO's own.
+One tool-calling turn per model first: a recorded LIBERO frame pair (two cameras), the tools, the model's reasoning
+setting. All nine answered with a tool call and reported their cost.
 
-| Model | Success | Steps used | Calls | Seconds per call | Tokens per episode (uncached in / cache read / cache write / out) | USD per episode |
-|---|---|---|---|---|---|---|
-| claude-haiku-5-5 | 0 of 3 | 220, 220, 220 | 9, 8, 10 | 3.2, 4.4, 3.0 | about 40 / 65K / 11K / 5.5K | 0.0047, 0.0051, 0.0045 |
-| claude-sonnet-5-5 | 0 of 3 | 220, 220, 220 | 10, 9, 9 | 5.1, 4.3, 4.9 | about 40 / 65K / 10K / 4.6K | 0.089, 0.066, 0.076 |
-| claude-opus-5-5 | 2 of 3 | 145, 220, 150 | 6, 8, 7 | 6.3, 5.4, 5.2 | about 30 / 40K / 7.5K / 3.2K | 0.113, 0.118, 0.098 |
+| Model | Tool called | Seconds | USD |
+|---|---|---|---|
+| Fable 5.2 | move_to | 30.6 | 0.130 |
+| Opus 5.5 | move_to | 45.1 | 0.100 |
+| Gemini 4 Carbon | move_to | 221 | 0.156 |
+| Gemini 4 Argon | move_to | 7.9 | 0.011 |
+| Gemini 3.8 Flash (high) | zoom | 124.6 | 0.061 |
+| GPT-6 Astra | move_to | 13.8 | 0.047 |
+| GPT 6.1 Sol | move_to | 12.8 | 0.0096 |
+| Muse Wonder 1.0 | move_to | 11.4 | 0.037 |
+| Kimi 3.1 | move_to | 10.2 | 0.014 |
 
-Three episodes per model is a small sample: these counts say what the harness can do, not how the models rank. What the
-transcripts show: Haiku and Sonnet found the bowl and descended to it, then closed the jaws two to four times where the
-fingers met on nothing (the grasp point over the bowl's inside or beside it), and gave up or ran out of steps. Opus
-placed the grasp point on the bowl's rim and lifted it at the first close in every episode; its failure was a bowl
-that slipped out while carried. Depth and reach were not the problem (each target was reached within 5 mm). The change
-most likely to help the others: a sharper view at the moment of grasping (the wrist image is 224 pixels; a crop tool or
-a higher-resolution wrist frame before a close), then the step budget, which a failed grasp uses up.
+Then LIBERO-Spatial task 1 ("pick up the black bowl between the plate and the ramekin and place it on the plate"), 220
+steps, three episodes per model (vla-eval's first three initial states), each model's own reasoning setting, the
+generic card and notes above, through the engine's native runtime and its openpi proxy. Success is LIBERO's own. The
+cost is OpenRouter's reported cost.
 
-With a sharper view at the grasp (2026-11-16, later): a `zoom` tool (a box of a camera's full frame enlarged to 448
-pixels, about 270 tokens on Claude; the engine's proxy now sends LIBERO's frames at their native 256 pixels), a derived
-`gripper_holding` state, and the same task, three episodes each. "Holds" counts the closes after which the fingers
-stopped more than 2.7 mm apart.
+| Model | Success | Calls | Seconds per call | USD per episode | What it struggles with |
+|---|---|---|---|---|---|
+| Fable 5.2 | 2 of 3 | 10, 5, 7 | 8.0 to 8.5 | 0.18 to 0.30 | Took the bowl by its rim at the first close every time; its failure released the bowl beside the plate's centre |
+| Opus 5.5 | 1 of 3 | 10, 7, 9 | 7.0 to 7.6 | 0.11 to 0.14 | Rim grasp at the first close every time; two releases LIBERO did not count on the plate (it overshot, then said done) |
+| Gemini 4 Carbon | 2 of 3 | 11, 7, 7 | 66 to 104 | 0.32 to 0.64 | Clean rim grasps; very slow (23K to 32K output tokens an episode); one release off the plate |
+| Gemini 4 Argon | 1 of 3 | 5, 7, 8 | 6.2 to 7.0 | 0.04 to 0.06 | Fast rim grasps; two releases off the plate that it reported as done |
+| Gemini 3.8 Flash (high) | 2 of 3 | 9, 8, 8 | 27 to 36 | 0.18 to 0.21 | Long reasoning (29K to 39K output tokens); knocked the bowl aside while repositioning once, then gave up |
+| GPT-6 Astra | 0 of 3 | 9, 11, 10 | 6.9 to 7.6 | 0.19 to 0.22 | First close at the bowl's centre (wider than the jaws); the rim retry held, then the steps ran out at the plate |
+| GPT 6.1 Sol | 2 of 3 | 11, 9, 8 | 7.3 to 8.3 | 0.035 to 0.046 | First close often inside the bowl, then a rim pinch; once pushed the bowl away and gave up |
+| Muse Wonder 1.0 | 0 of 3 | 13, 9, 13 | 6.6 to 9.7 | 0.22 to 0.37 | Aimed at the bowl's centre and closed on nothing, repeatedly; used zoom most (4 calls) but ran out of steps |
+| Kimi 3.1 | 0 of 3 | 7, 11, 10 | 4.9 to 6.8 | 0.03 to 0.07 | Grasps held, but the bowl slipped out in one fast carry and two releases missed the plate though it said done |
 
-| Run | Success | Closes, holds | Zoom calls | USD per episode |
-|---|---|---|---|---|
-| claude-haiku-5-5, before | 0 of 3 | 4, 2 | (no tool) | about 0.005 |
-| claude-haiku-5-5, zoom tool | 0 of 3 | 5, 4 | 0 | 0.004 to 0.006 |
-| claude-sonnet-5-5, before | 0 of 3 | 9, 4 | (no tool) | 0.066 to 0.089 |
-| claude-sonnet-5-5, zoom tool | 0 of 3 | 9, 4 | 0 | 0.082 to 0.083 |
-| claude-sonnet-5-5, zoom tool and a note to check the alignment before closing | 0 of 3 | 3, 3 | 0 | 0.056 to 0.063 |
-| claude-opus-5-5, before (for reference) | 2 of 3 | 3, 3 | (no tool) | 0.098 to 0.118 |
+What the transcripts show: the bowl is wider than the open jaws, so a grasp holds only on its rim. Fable 5.2, Opus 5.5
+and the two Gemini 4 models found that at the first close every time; GPT-6 Astra, GPT 6.1 Sol and Muse Wonder 1.0
+first closed at the bowl's centre and met nothing. Among the models that held the bowl, most failures were the release:
+held by its rim, the bowl's centre sits about 5 cm from the hand, and the bowl came down on the plate's edge or beside
+it, after which the model called `done` without looking again. The change most likely to help next: a generic note to
+look at the object after a release (and to offset a rim-held object's centre), then a larger step budget for the slow
+reasoners. `zoom` was called 7 times in 27 episodes (Muse Wonder 4, Kimi, Gemini 3.8 Flash and Gemini 4 Carbon once each).
+Prompt tokens per episode: 40K to 420K, most of them cache reads. Spend: 4.84 USD for the 27 episodes,
+plus 0.57 USD for the one-turn checks.
 
-Neither model called `zoom`, even when the note named it. The note itself changed Sonnet's grasps: one close per
-episode, each holding the bowl, against 9 closes and 4 holds before; it then carried the bowl over the plate and released
-it in all three episodes, and LIBERO counted none on the plate (the model's own notes say "off-centre" and "couldn't
-confirm"). So the grasp was the gap for Sonnet and a careful-grasp instruction answers it; placement is the next one.
-The note is now part of the default notes (it names no task). Three episodes per run is a small sample.
+Three episodes per model is a small sample: these counts say what the harness can do with each model, not how the
+models rank.
 
-Earlier (before the step budget and the faster settle): one Haiku episode at effort low, 6 calls, 0.0028 USD, failed.
-
-Tests: `tests/families/test_llm_agent.py`, recorded tool calls on the Messages, Chat Completions and Responses wires and
-an OpenAI-compatible base URL, the driver against a stand-in LIBERO, the custom environments' cards, caps, a rejected
-key, the server over the websocket.
-
-## OpenAI models (read 2026-11-16)
-
-From developers.openai.com/api/docs/pricing and the model pages: the API's Codex model is `gpt-5.3-codex` (deprecated
-there; Responses API only; text and image input; function calling; reasoning effort low to xhigh; 400K context, 128K
-output; 1.75 / 0.175 cached / 14 USD per million tokens). Codex itself now recommends the general models `gpt-6-astra`
-(10 / 1.00 / 50), `gpt-6.1-sol` (2 / 0.10 / 10), `gpt-6.1-terra` (1 / 0.05 / 5) and `gpt-6-luna` (0.10 / 0.01 / 0.50,
-cache writes 0.125): text and image input, function calling on the Responses API (on Chat Completions only with
-reasoning effort `none`), effort none or low to max, 1.05M context. So OpenAI models run on the Responses wire by
-default here. A real run was not possible: the service's OpenAI key answered 429 `credit_balance_exhausted` on the
-first call of a `gpt-6-luna` episode (the server failed the request after the agent's retries, as designed).
-
-## Provider status
-
-| Provider (wire) | Status |
-|---|---|
-| Anthropic, Messages API | 10 real LIBERO episodes (Claude Haiku, Sonnet and Opus 5.5); recorded responses in tests |
-| OpenAI, Responses API (default for openai/*) | recorded responses in tests; the real API refused the key (no credit) |
-| OpenAI, Chat Completions | recorded responses in tests only; never met the real API here |
-| OpenAI-compatible base URL (vLLM, Ollama, Together, Fireworks, OpenRouter) | recorded responses in tests only |
-| Google: OpenAI-compatible endpoint, Interactions, Live | not tested here (upstream tests only) |
-| x-ai, groq, mistralai, deepseek | not tested here (upstream tests only) |
+Tests: `tests/families/test_llm_agent.py`: a recorded episode through OpenRouter (the request body: slug, reasoning,
+caching, provider routing), one recorded tool call for each of the nine, OpenRouter's failure classes, the settings
+refusing any model outside the nine, the driver against a stand-in LIBERO, the custom environments' cards, caps, a
+rejected key, the server over the websocket.
 
 ## Not built
 
-- `pgs up` does not create this family's endpoint: it is a CPU endpoint without a volume, which the launcher does not
-  make yet. Playground Bench's compute plane creates it; `start.sh` is its boot.
+- `pgs up <name>` makes a CPU load-balancing endpoint (cpu3c, 2 vCPU, no volume) with `start.sh` as its boot; it has not
+  run on Runpod yet.
 - Code-as-policy mode; a card for LIBERO's floor and living-room scenes; a higher-resolution render on request in LIBERO
   (vla-eval renders it at 256 pixels, fixed), which the reply's `render` hint asks of clients that can.
