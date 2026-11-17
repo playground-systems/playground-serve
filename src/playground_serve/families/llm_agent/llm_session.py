@@ -73,8 +73,9 @@ ZOOM_TOOL = {
 # setting and the use of the step budget, never about a task or a benchmark.
 DEFAULT_NOTES = ("The robot, the objects and their physics are simulated; the camera images are rendered. Plan each "
                  "motion against the step budget in the observation: look at every camera before the first move, combine "
-                 "axes in one move where the path is clear, and after closing the gripper read its state to see whether it "
-                 "holds something.")
+                 "axes in one move where the path is clear, before you close the gripper on an object check the alignment of "
+                 "the fingers with it (the zoom tool shows a part of an image enlarged), and after closing read the "
+                 "gripper's state to see whether it holds something.")
 
 
 @dataclass(frozen=True)

@@ -144,6 +144,26 @@ that slipped out while carried. Depth and reach were not the problem (each targe
 most likely to help the others: a sharper view at the moment of grasping (the wrist image is 224 pixels; a crop tool or
 a higher-resolution wrist frame before a close), then the step budget, which a failed grasp uses up.
 
+With a sharper view at the grasp (2026-11-16, later): a `zoom` tool (a box of a camera's full frame enlarged to 448
+pixels, about 270 tokens on Claude; the engine's proxy now sends LIBERO's frames at their native 256 pixels), a derived
+`gripper_holding` state, and the same task, three episodes each. "Holds" counts the closes after which the fingers
+stopped more than 2.7 mm apart.
+
+| Run | Success | Closes, holds | Zoom calls | USD per episode |
+|---|---|---|---|---|
+| claude-haiku-5-5, before | 0 of 3 | 4, 2 | (no tool) | about 0.005 |
+| claude-haiku-5-5, zoom tool | 0 of 3 | 5, 4 | 0 | 0.004 to 0.006 |
+| claude-sonnet-5-5, before | 0 of 3 | 9, 4 | (no tool) | 0.066 to 0.089 |
+| claude-sonnet-5-5, zoom tool | 0 of 3 | 9, 4 | 0 | 0.082 to 0.083 |
+| claude-sonnet-5-5, zoom tool and a note to check the alignment before closing | 0 of 3 | 3, 3 | 0 | 0.056 to 0.063 |
+| claude-opus-5-5, before (for reference) | 2 of 3 | 3, 3 | (no tool) | 0.098 to 0.118 |
+
+Neither model called `zoom`, even when the note named it. The note itself changed Sonnet's grasps: one close per
+episode, each holding the bowl, against 9 closes and 4 holds before; it then carried the bowl over the plate and released
+it in all three episodes, and LIBERO counted none on the plate (the model's own notes say "off-centre" and "couldn't
+confirm"). So the grasp was the gap for Sonnet and a careful-grasp instruction answers it; placement is the next one.
+The note is now part of the default notes (it names no task). Three episodes per run is a small sample.
+
 Earlier (before the step budget and the faster settle): one Haiku episode at effort low, 6 calls, 0.0028 USD, failed.
 
 Tests: `tests/families/test_llm_agent.py`, recorded tool calls on the Messages, Chat Completions and Responses wires and
@@ -176,4 +196,5 @@ first call of a `gpt-6-luna` episode (the server failed the request after the ag
 
 - `pgs up` does not create this family's endpoint: it is a CPU endpoint without a volume, which the launcher does not
   make yet. Playground Bench's compute plane creates it; `start.sh` is its boot.
-- Code-as-policy mode; a crop or zoom tool for the grasp; a card for LIBERO's floor and living-room scenes.
+- Code-as-policy mode; a card for LIBERO's floor and living-room scenes; a higher-resolution render on request in LIBERO
+  (vla-eval renders it at 256 pixels, fixed), which the reply's `render` hint asks of clients that can.
