@@ -548,7 +548,10 @@ def test_wait_times_out_and_scales_to_zero(env):
     api.gateway = [502] * 10_000
     with pytest.raises(LauncherError, match="Scaled the endpoint to zero"):
         launcher().up("pi05_libero")
-    assert api.calls[-1][2] == {"workers": DOWN}
+    # The region probe's thread is stopped after the scale-down, so its own endpoint's delete may come last.
+    down = max(i for i, c in enumerate(api.calls) if c[0] == "update_endpoint")
+    assert api.calls[down][2] == {"workers": DOWN}
+    assert all(c[0].startswith("probe_") for c in api.calls[down + 1:])
 
 
 @pytest.mark.parametrize("warm", [False, True])

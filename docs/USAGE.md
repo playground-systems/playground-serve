@@ -167,4 +167,5 @@ uv run pytest -q
 
 `tests/client/test_import.py` describes how to run the client tests on Python 3.8. `scripts/check_release.sh` checks
 the tree for secrets and private names before a release. `python3 docs/assets/make_assets.py` redraws the README's
-pictures (the chart reads its numbers from MODELS.md).
+pictures (the chart reads its numbers from MODELS.md). [CONTRIBUTING.md](../CONTRIBUTING.md) has the rest: what the
+tests on every pull request run, which tests skip and why, and how to add a model family.

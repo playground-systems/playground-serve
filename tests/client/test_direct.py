@@ -96,6 +96,7 @@ def test_worker_side_address_and_token():
     assert direct.address({**env, "RS_DIRECT": ""}) is None and direct.address({"RS_DIRECT": "8002"}) is None
     info, context, port = direct.setup(env)
     assert (info["host"], info["port"], port) == ("127.0.0.1", 48245, 8002) and "BEGIN CERTIFICATE" in info["cert"]
+    assert context.num_tickets == 0  # see direct.certificate()
     assert direct.allowed(f"Bearer {info['token']}", info["token"])
     assert not direct.allowed(None, info["token"]) and not direct.allowed("Bearer x", info["token"])
     assert direct.setup({}) is None

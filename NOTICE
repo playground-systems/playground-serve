@@ -130,6 +130,10 @@ Apache License, Version 2.0
   - Not copied here: `pgs run so101 --sim` downloads Simulation/SO101/so101_new_calib.xml and the 13 meshes it uses
     (the MuJoCo model of the SO-101 arm) at that commit into the user's cache, checked against SHA-256 sums stored in
     src/playground_serve/run/sim.py.
+  - docs/assets/so101-sim.gif: images rendered from that model (Apache 2.0, as above) by `pgs run so101 --sim` in a
+    run against molmoact2_so101 on 2026-11-16: the top and side camera views of every 10th tick from tick 250 to 640,
+    shrunk to 320 x 240 each, side by side, at 10 frames per second, with a short fade back to the first frame. The
+    table, cube and bowl are drawn by run/sim.py.
 
 
 LeRobot, by Hugging Face
