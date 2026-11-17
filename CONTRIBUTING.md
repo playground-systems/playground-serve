@@ -10,7 +10,7 @@ You need [uv](https://docs.astral.sh/uv/) and git. No GPU and no Runpod account:
 ```bash
 git clone https://github.com/playground-systems/playground-serve
 cd playground-serve
-uv sync                 # Python 3.10+, with the dev group: pytest, the real openpi client, MuJoCo
+uv sync                 # Python 3.11+, with the dev group: pytest, the real openpi client, MuJoCo
 uv run pgs --help
 ```
 
@@ -22,10 +22,9 @@ scripts/check_release.sh  # no keys, tokens, home-directory paths, e-mail or IP 
 ```
 
 Both run on every pull request and every push to `main` ([.github/workflows/tests.yml](.github/workflows/tests.yml)):
-the suite on Python 3.10 to 3.14, the client tests on Python 3.8, and the release check.
+the suite on Python 3.11 to 3.14, the client tests on Python 3.11, and the release check.
 
-- The client (`from playground_serve import connect`) supports Python 3.8. The uv lock covers 3.10 and later, so the
-  3.8 check has its own environment; [tests/client/test_import.py](tests/client/test_import.py) has the commands.
+- The separate client job installs from package metadata on Python 3.11, independently of the development lock; [tests/client/test_import.py](tests/client/test_import.py) has the commands.
 - Five tests skip in the development environment because it does not install what they need: openpi
   (`tests/test_models_openpi.py` and `tests/test_bundle_worker.py`, whose docstrings say what they need), torch (two
   Cosmos 3 checks) and LeRobot (`test_lerobot_units`; [docs/RUN.md](docs/RUN.md#development) has the command). None

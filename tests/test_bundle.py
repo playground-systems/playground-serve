@@ -33,7 +33,7 @@ TODAY = {
 REMOVED = {"JAX_COMPILATION_CACHE_DIR"}
 ADDED = {
     "RS_JAX_CACHE_ROOT": "/runpod-volume/jax_cache",
-    "RS_ENV_TAR": "/runpod-volume/rs/env.tar",
+    "RS_ENV_TAR": "/runpod-volume/rs/env-secure-v2.tar",
     "RS_MODEL": "pi05_libero",
     "RS_OPENPI_CONFIG": "pi05_libero",
     "RS_CHECKPOINT": "gs://openpi-assets/checkpoints/pi05_libero",
@@ -43,7 +43,7 @@ ADDED = {
 
 def test_worker_files_are_the_packaged_files():
     files = bundle.worker_files()
-    assert tuple(files) == bundle.WORKER_FILES
+    assert tuple(files) == (*bundle.WORKER_FILES, "pgs_msgpack_numpy.py")
     on_disk = {p.relative_to(WORKER).as_posix() for p in WORKER.rglob("*")
                if p.is_file() and not p.name.startswith(".") and "__pycache__" not in p.parts}
     assert on_disk == set(bundle.WORKER_FILES) | {"__init__.py"}
@@ -61,7 +61,7 @@ def test_pack_is_deterministic():
         assert marker not in raw
     with tarfile.open(fileobj=io.BytesIO(raw)) as tar:
         members = tar.getmembers()
-    assert [m.name for m in members] == sorted(bundle.WORKER_FILES)
+    assert [m.name for m in members] == sorted(files)
     for m in members:
         assert (m.type, m.mode, m.mtime, m.uid, m.gid, m.uname, m.gname, m.pax_headers) == (
             tarfile.REGTYPE, 0o644, 0, 0, 0, "", "", {})

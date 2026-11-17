@@ -52,7 +52,7 @@ def test_bundle():
             "health.py", "server_decode.py", "pgs_msgpack_numpy.py", "build_lib.sh"} <= set(files)
     assert not {"spec.py", "NOTES.md"} & set(files)
     env = bundle.endpoint_env(models.get("molmoact2_libero"), "r1")
-    assert env["RS_ENV_TAR"] == "/runpod-volume/pgs/molmoact2/env.tar" and env["RS_FAMILY"] == "molmoact2"
+    assert env["RS_ENV_TAR"] == "/runpod-volume/pgs/molmoact2/env-secure-v2.tar" and env["RS_FAMILY"] == "molmoact2"
     assert env["RS_CHECKPOINT"].startswith("hf://allenai/MolmoAct2-LIBERO@") and env["RS_FAST"] == "auto"
     shipped = bundle.unpack(env["RS_FILES"])
     assert shipped == bundle.worker_files("molmoact2", entry="molmoact2_libero")

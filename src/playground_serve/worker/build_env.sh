@@ -17,4 +17,5 @@ git fetch -q --depth 1 https://github.com/Physical-Intelligence/openpi.git "$OPE
 git checkout -q FETCH_HEAD
 ts fetched "$(git rev-parse HEAD)"
 uv sync --frozen --no-dev
+uv pip install --python /opt/rs/openpi/.venv/bin/python "pillow>=13.0.0"
 ts synced "$(du -sh /opt/rs/openpi/.venv | cut -f1) venv"

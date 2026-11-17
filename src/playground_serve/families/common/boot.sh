@@ -20,7 +20,7 @@ now() { date -u +%FT%T.%3NZ; }
 echo "{\"rs\":\"boot\",\"epoch\":$RS_BOOT_T,\"utc\":\"$(now)\",\"release\":\"${RS_RELEASE:-}\",\"release_id\":\"${RS_RELEASE_ID:-}\",\"model\":\"${RS_MODEL:-}\",\"family\":\"${RS_FAMILY:-}\"}"
 rm -f /tmp/rs_ready
 python3 /rs/health.py &
-if [ -f /opt/rs_env_ok ]; then  # a restarted container kept its disk
+if [ -f /opt/rs_env_ok ] && /opt/pgs/venv/bin/python -c 'import sys; assert sys.version_info >= (3, 11)' 2>/dev/null; then  # a restarted container kept its disk
   ENV_FROM=local
 elif python3 /rs/stage.py check-tar "$ENV_TAR"; then
   ENV_FROM=volume
@@ -55,6 +55,9 @@ else
   (nice -n 5 /opt/pgs/venv/bin/python -m compileall -q -j 16 -x '/(tests?|testing)/' \
     /opt/pgs/venv/lib/python3*/site-packages; touch $RS_PYC_DONE) >/dev/null 2>&1 &
 fi
+# Upgrade cached environments before any untrusted image reaches Pillow. Fail closed.
+/opt/pgs/venv/bin/python -c 'import PIL; assert int(PIL.__version__.split(".")[0]) >= 13' 2>/dev/null || \
+  (python3 -m pip install -q 'uv==0.11.28' && uv pip install --python /opt/pgs/venv/bin/python 'pillow>=13.0.0') || exit 1
 mkdir -p "${HF_HOME:-/runpod-volume/hf}" 2>/dev/null
 # The container gets RUNPOD_CPU_COUNT CPUs (16 on an RTX 4090 worker) of a host with many more; uncapped, torch starts
 # 64 threads, which the container's CPU share throttles. MolmoAct2 DROID fast path, same host, back to back: p90 117 to

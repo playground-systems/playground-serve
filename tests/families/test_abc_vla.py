@@ -103,7 +103,7 @@ def test_spec_matches_serve():
         assert s.gpu_pools and set(s.gpu_pools) <= set(POOL_PRICES) and s.gpu_pools[0] == "ADA_24"
         assert s.volume_gb >= 20 and s.min_container_ram_gb >= 16 and not s.secrets
         env = s.endpoint_env()
-        assert env["RS_ENV_TAR"] == "/runpod-volume/pgs/abc_vla/env.tar" and env["RS_MODEL"] == name
+        assert env["RS_ENV_TAR"] == "/runpod-volume/pgs/abc_vla/env-secure-v2.tar" and env["RS_MODEL"] == name
     assert serve.LICENSE == spec.LICENSE and serve.COMMIT == spec.COMMIT
     obs = spec.example_observation(NAME)
     assert set(obs["images"]) == set(spec.CAMERAS) and obs["state"].shape == (spec.STATE_DIM,)

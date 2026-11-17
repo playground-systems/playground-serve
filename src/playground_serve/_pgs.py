@@ -1,12 +1,11 @@
-"""Entry point of the `pgs` command. The launcher needs Python 3.10 or later; the robot client also runs on 3.8."""
+"""Entry point of the `pgs` command (Python 3.11+ for patched Pillow)."""
 
 import sys
 
 
 def main():
-    if sys.version_info < (3, 10):
-        sys.exit(f"pgs needs Python 3.10 or later; this is Python {sys.version_info[0]}.{sys.version_info[1]}, where "
-                 "only the client (`from playground_serve import connect`) is supported.")
+    if sys.version_info < (3, 11):
+        sys.exit("playground-serve needs Python 3.11 or later for its security-patched image decoder.")
     from .cli import main as cli_main
 
     return cli_main()

@@ -708,6 +708,7 @@ class Launcher:
         release = env[RELEASE_KEY]
         ep, _, (their_eps, _) = self.reconcile(model, self.api.list_endpoints(), [])
         flavor, vcpu = spec.cpu.split("-")[:2]
+        self._ensure_owner()
         body = self._agent_body(spec, env, want)
         size = len(json.dumps(body).encode())
         if size > MAX_REQUEST_BYTES:

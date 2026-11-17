@@ -14,14 +14,13 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-# The client (`from playground_serve import connect`) runs on 3.8; `pgs` says it needs 3.10 (_pgs.py).
-requires-python = ">=3.8"
+# Pillow 13 security fixes require Python 3.11 or later.
+requires-python = ">=3.11"
 dependencies = [
     "msgpack>=1.0.5",
     "numpy>=1.22.4",
-    "pillow>=10.0",
-    "websockets>=13.1; python_version < '3.9'",  # 13.1 is the last release for Python 3.8
-    "websockets>=14.0; python_version >= '3.9'",
+    "pillow>=13.0.0",
+    "websockets>=14.0",
 ]
 
 [project.optional-dependencies]
@@ -63,9 +62,6 @@ include = ["src", "tests", "docs", "scripts", "README.md", "MODELS.md", "LICENSE
 allow-direct-references = true
 
 [tool.uv]
-# The lock (the development environment) stays on 3.10+; the client's 3.8 check uses its own venv
-# (tests/client/test_import.py says how).
-environments = ["python_version >= '3.10'"]
 # LeRobot needs numpy 2, the dev group's openpi-client numpy below 2 (docs/RUN.md, Development, tests both).
 conflicts = [[{ extra = "so101" }, { group = "dev" }]]
 

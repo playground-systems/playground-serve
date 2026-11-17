@@ -133,7 +133,7 @@ def test_spec_matches_serve():
     # it saves), then the A40; `pgs up --gpu` picks another
     assert set(s.gpu_pools) <= set(POOL_PRICES) and s.gpu_pools == ("ADA_24", "ADA_32_PRO", "AMPERE_48")
     assert not s.secrets
-    assert s.endpoint_env()["RS_ENV_TAR"] == "/runpod-volume/pgs/xiaomi_r1/env.tar"
+    assert s.endpoint_env()["RS_ENV_TAR"] == "/runpod-volume/pgs/xiaomi_r1/env-secure-v2.tar"
     assert serve.COMMIT == spec.COMMIT and serve.LICENSE == spec.LICENSE
 
 

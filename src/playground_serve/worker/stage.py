@@ -71,12 +71,28 @@ def sizes(root: pathlib.Path) -> dict[str, int]:
             if p.is_file() and not p.name.startswith(".rs_")}  # not this module's own flags
 
 
+def safe_target(root: pathlib.Path, name: str) -> pathlib.Path:
+    """Resolve a remote filename under root, refusing traversal and existing symlinks."""
+    if not isinstance(name, str) or not name or "\\" in name or "\0" in name:
+        raise ValueError("invalid checkpoint filename")
+    parts = name.split("/")
+    if any(p in ("", ".", "..") or p.startswith(".rs_") for p in parts) or ":" in parts[0]:
+        raise ValueError("unsafe checkpoint filename")
+    target = root
+    for part in parts:
+        target = target / part
+        if target.is_symlink():
+            raise ValueError("checkpoint filename traverses a symlink")
+    target.resolve().relative_to(root.resolve())
+    return target
+
+
 def complete(root: str | pathlib.Path) -> bool:
     """True if root/.rs_complete exists and every file it lists is there with that size."""
     root = pathlib.Path(root)
     try:
         want = json.loads((root / MARKER).read_text())["files"]
-        return all((root / name).stat().st_size == size for name, size in want.items())
+        return all(safe_target(root, name).stat().st_size == size for name, size in want.items())
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return False
 
@@ -200,6 +216,9 @@ def fetch(uri: str, dest: str | pathlib.Path, wait_for: str | None = None) -> di
     objects = listing(uri)  # before any flag is removed: a URI that cannot be listed leaves a complete copy alone
     if not objects:
         raise FileNotFoundError(f"no objects under {uri}")
+    targets = [safe_target(dest, rel) for rel, _, _ in objects]
+    if len(set(targets)) != len(targets):
+        raise ValueError("duplicate checkpoint filename")
     if complete(dest) and json.loads((dest / MARKER).read_text())["files"] == {rel: size for rel, size, _ in objects}:
         return {rel: size for rel, size, _ in objects}  # a restarted container: the same files are already here
     for flag in (".rs_failed", SMALL, MARKER):
@@ -209,7 +228,7 @@ def fetch(uri: str, dest: str | pathlib.Path, wait_for: str | None = None) -> di
         files[rel] = size
         if url.startswith(HF) and size > CHUNK:
             url = final_url(url)
-        target = dest / rel
+        target = safe_target(dest, rel)
         target.parent.mkdir(parents=True, exist_ok=True)
         with open(target, "wb") as f:
             f.truncate(size)
@@ -258,7 +277,10 @@ def copy_dir(src: pathlib.Path, dst: pathlib.Path) -> None:
     drop_leftovers(dst)
     tmp = tmp_name(dst)
     for name in files:
-        (tmp / name).parent.mkdir(parents=True, exist_ok=True)
+        safe_target(src, name)
+        safe_target(tmp, name)
+    for name in files:
+        safe_target(tmp, name).parent.mkdir(parents=True, exist_ok=True)
     with concurrent.futures.ThreadPoolExecutor(8) as ex:  # parallel streams: one stream to the volume is slow
         list(ex.map(lambda name: copy_synced(src / name, tmp / name), sorted(files, key=lambda n: -files[n])))
     if sizes(tmp) != files:

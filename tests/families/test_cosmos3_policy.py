@@ -191,7 +191,7 @@ def test_bringup_bundle_fits_the_env_limit():
             "stage.py", "serve.py", "build_env.sh", "fast.py", f"selftest_{EDGE}.json"} <= set(files)
     assert "pgs_msgpack_numpy.py" in files and "bringup.py" not in files and "verify.py" not in files
     assert "verify.py" in bringup.bundle.worker_files("cosmos3_policy", verify=True)  # bring-up runs (RS_VERIFY=1) only
-    assert env["RS_ENV_TAR"] == "/runpod-volume/pgs/cosmos3_policy/env.tar" and env["RS_FAST"] == "auto"
+    assert env["RS_ENV_TAR"] == "/runpod-volume/pgs/cosmos3_policy/env-secure-v2.tar" and env["RS_FAST"] == "auto"
     assert sum(len(k) + len(v) for k, v in env.items()) < bringup.MAX_ENV_TOTAL  # Runpod's request limit
 
 

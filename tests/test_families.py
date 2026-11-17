@@ -146,7 +146,7 @@ def test_up_creates_a_family_endpoint_from_its_spec(tmp_path):
     vol = result["volume"]
     assert "molmoact2-libero" in ep["name"] and ep["gpu"]["pools"] == ["ADA_24"]
     assert vol["size"] == 50 and ep["env"]["RS_FAMILY"] == "molmoact2"
-    assert ep["env"]["RS_ENV_TAR"] == "/runpod-volume/pgs/molmoact2/env.tar"
+    assert ep["env"]["RS_ENV_TAR"] == "/runpod-volume/pgs/molmoact2/env-secure-v2.tar"
     text = "\n".join(out)
     assert "model's Python environment" in text and "pgs demo molmoact2_libero" in text
     assert "example_obs" not in text  # openpi's LIBERO example is not this model's observation

@@ -72,7 +72,7 @@ def test_spec_matches_serve():
         assert s.secrets == ("HF_TOKEN",) and bool(s.gpu_validated) == (name == "gr00t_n17_libero")
         assert s.env["HF_HUB_ENABLE_HF_TRANSFER"] == "0"
         assert set(s.gpu_pools) <= set(POOL_PRICES) and s.volume_gb >= 20
-        assert s.endpoint_env()["RS_ENV_TAR"] == "/runpod-volume/pgs/gr00t_n17/env.tar"
+        assert s.endpoint_env()["RS_ENV_TAR"] == "/runpod-volume/pgs/gr00t_n17/env-secure-v2.tar"
     assert (spec.COMMIT, spec.REPO, spec.REVISION, spec.LICENSE) == (serve.COMMIT, serve.REPO, serve.REVISION,
                                                                       serve.LICENSE)
     assert spec.STATE_DIMS == serve.STATE_DIMS and spec.PROMPT_KEY == serve.PROMPT_KEY

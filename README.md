@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/playground-systems/playground-serve/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/playground-systems/playground-serve/actions/workflows/tests.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/playground-systems/playground-serve/blob/main/LICENSE)
-[![Python: pgs 3.10+, client 3.8+](https://img.shields.io/badge/python-3.10%2B%20%7C%20client%203.8%2B-blue)](pyproject.toml)
+[![Python: pgs 3.11+, client 3.11+](https://img.shields.io/badge/python-3.11%2B%20%7C%20client%203.11%2B-blue)](pyproject.toml)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](#status)
 
 **Open source serving for robot policies and LLM agents.** Serve π0.5, MolmoAct2, GR00T and more on a serverless
@@ -38,11 +38,11 @@ east coast to US-NC-1 (p50), 1.34 USD/hr only while a worker runs.
 - **Faster, and still the same model.** Each fast path keeps the weights, precision, steps and inputs, and must
   reproduce the stock actions at every start or the worker serves stock: model calls 1.2x to 5.1x faster.
 - **Your account, your choices:** the GPU, the region, a direct port past the gateway, your own checkpoints.
-- **A small client:** four lines of Python 3.8+, openpi's websocket protocol, an action queue for control loops.
+- **A small client:** four lines of Python 3.11+, openpi's websocket protocol, an action queue for control loops.
 
 ## Quickstart
 
-You need a [Runpod](https://www.runpod.io) account with credit and Python 3.10 or later. The first `pgs up` asks for
+You need a [Runpod](https://www.runpod.io) account with credit and Python 3.11 or later. The first `pgs up` asks for
 a Runpod API key, says where to create it and which permissions to pick, and saves it for later commands.
 
 ```bash

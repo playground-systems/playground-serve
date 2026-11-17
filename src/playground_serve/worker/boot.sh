@@ -61,6 +61,9 @@ else
     fsspec gcsfs aiohttp google tqdm typeguard websockets msgpack PIL pydantic numpydantic huggingface_hub \
     /opt/rs/openpi/src /opt/rs/openpi/packages/openpi-client/src; touch $RS_PYC_DONE) >/dev/null 2>&1 &
 fi
+# Upgrade cached environments before any untrusted image reaches Pillow. Fail closed.
+/opt/rs/openpi/.venv/bin/python -c 'import PIL; assert int(PIL.__version__.split(".")[0]) >= 13' 2>/dev/null || \
+  (python3 -m pip install -q 'uv==0.11.28' && uv pip install --python /opt/rs/openpi/.venv/bin/python 'pillow>=13.0.0') || exit 1
 if [ $RS_PATH = fast ]; then
   RC=clone
   if python3 /rs/fastpath.py clone /opt/rs/realtime-vla; then

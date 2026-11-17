@@ -9,7 +9,7 @@ Request keys, besides the observation in the card's own keys (its cameras, its n
                   or at least with an episode's first; without one the server looks for a built-in card whose keys the
                   request has (LIBERO's openpi layout: libero_franka).
     "episode"     an id that is new for every episode (any string). Episode state is kept by this id, so a client that
-                  reconnects continues its episode. Without it, an episode is the connection and its prompt: a new
+                  reconnects continues its episode only with its secret episode_token. Without it, an episode is the connection and its prompt: a new
                   prompt on the same connection starts a new episode.
     "max_steps"   optional: the episode's step limit, which the model is told.
     "embodiment_card", "reset"  a custom environment's card and episode start (Playground Bench's docs/cloud/CUSTOM.md,
@@ -43,6 +43,8 @@ import argparse
 import asyncio
 import concurrent.futures
 import itertools
+import hmac
+import secrets
 import logging
 import os
 import pathlib
@@ -81,9 +83,10 @@ class AgentPolicy:
     def __init__(self, settings: llm_session.Settings, factory=llm_session.make_policy) -> None:
         self.settings, self.factory = settings, factory
         self.sessions: dict[str, llm_session.Session] = {}
+        self.access: dict[str, tuple[str, str]] = {}  # episode -> (original connection, resume capability)
         self.lock = threading.Lock()
         self.ledger = llm_session.Ledger()
-        self.metadata = {"playground_serve": {"agent": True, "agent_settings": settings.public()},
+        self.metadata = {"playground_serve": {"agent": True, "episode_tokens": True, "agent_settings": settings.public()},
                          "embodiment_card": True, "image_mode": "jpeg", "image_size": "native"}
         self.last_card: dict[str, llm_card.Card] = {}
         self.resets: dict[str, int] = {}  # connection -> episodes started by reset: true
@@ -106,6 +109,11 @@ class AgentPolicy:
     def infer(self, request: dict, conn: str) -> dict:
         card = self._card(request, conn)
         episode = request.get("episode")
+        if episode not in (None, "") and (not isinstance(episode, str) or len(episode) > 256):
+            raise ValueError("episode must be a string of at most 256 characters")
+        token = request.get("episode_token")
+        if token is not None and (not isinstance(token, str) or not 32 <= len(token) <= 128 or not token.isascii()):
+            raise ValueError("episode_token must be 32 to 128 ASCII characters")
         prompt = str(llm_card.lookup(request, card.prompt) or "")
         marked = episode not in (None, "") or request.get("reset") is True
         if request.get("reset") is True:
@@ -118,10 +126,19 @@ class AgentPolicy:
         with self.lock:
             self._expire()
             session = self.sessions.get(key)
+            if session is not None and key.startswith("e:"):
+                owner, expected = self.access[key]
+                if conn != owner and not hmac.compare_digest(token or "", expected):
+                    raise PermissionError("episode resume requires its episode_token")
             if session is None or session.card.raw != card.raw:
+                if key.startswith("e:"):
+                    self.access[key] = (conn, token or secrets.token_urlsafe(32))
                 session = self.sessions[key] = llm_session.Session(key, card, self.settings, self.ledger, self.factory)
                 log("episode_start", card=card.name, keyed="episode" if key.startswith("e:") else "connection")
+            resume = self.access.get(key)
         reply = session.step(request)
+        if resume is not None:
+            reply["agent"]["episode_token"] = resume[1]
         if reply["agent"].get("turns"):
             a = reply["agent"]
             log("agent_call", calls=a["calls"], tokens=a["tokens"], usd=a["usd"], finished=(a.get("finished") or {}).get("kind"))
@@ -131,11 +148,13 @@ class AgentPolicy:
         now = time.monotonic()
         for k in [k for k, s in self.sessions.items() if now - s.touched > IDLE_S]:
             del self.sessions[k]
+            self.access.pop(k, None)
 
     def close_connection(self, conn: str) -> None:
         with self.lock:
             for k in [k for k in self.sessions if k.startswith(f"c:{conn}:")]:
                 del self.sessions[k]
+                self.access.pop(k, None)
             self.last_card.pop(conn, None)
             self.resets.pop(conn, None)
 

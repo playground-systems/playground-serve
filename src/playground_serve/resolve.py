@@ -12,7 +12,8 @@ environment variable, then the Runpod account by the endpoint name `pgs up` give
 that state file) before other owners'. No target: the one endpoint there is, if there is exactly one. Only the account
 lookup needs a key that may read the account; a key that may only call the endpoint works with the others.
 Key: the `api_key` argument, the `key_file` argument, RUNPOD_API_KEY, then ~/.config/playground-serve/key. The key is
-sent only in the Authorization header and never printed.
+sent only in the Authorization header and never printed. Implicit keys go only to TLS Runpod gateway URLs;
+custom endpoints require an explicit api_key or key_file.
 
 This module imports on Python 3.8 like the client; the launcher's modules are imported only for the account lookup.
 """
@@ -26,6 +27,7 @@ import pathlib
 import re
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 
 from . import __version__, state
 
@@ -140,7 +142,14 @@ def connect(target: str | None = None, *, api_key: str | None = None, key_file: 
     from .client import connect as open_client
 
     key = resolve_key(api_key, key_file)
-    return open_client(resolve_url(target, key), api_key=key, **options)
+    url = resolve_url(target, key)
+    at = urlsplit(url)
+    trusted = (at.scheme == "wss" and at.port in (None, 443) and at.username is None
+               and at.password is None and re.fullmatch(r"[A-Za-z0-9-]+\.api\.runpod\.ai", at.hostname or ""))
+    # Ambient account credentials are scoped to Runpod. A custom service must be
+    # given its credential explicitly, rather than inheriting the user's saved key.
+    explicit = bool(api_key and api_key.strip()) or key_file is not None
+    return open_client(url, api_key=key if trusted or explicit else None, **options)
 
 
 @dataclasses.dataclass(frozen=True)
