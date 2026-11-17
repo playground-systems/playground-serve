@@ -43,19 +43,27 @@ class AgentFailure(RuntimeError):
     pass
 
 
+# The agent's evaluation notes on every episode (the user's own notes, PGS_AGENT_NOTES, follow them). They are about the
+# setting and the use of the step budget, never about a task or a benchmark.
+DEFAULT_NOTES = ("The robot, the objects and their physics are simulated; the camera images are rendered. Plan each "
+                 "motion against the step budget in the observation: look at every camera before the first move, combine "
+                 "axes in one move where the path is clear, and after closing the gripper read its state to see whether it "
+                 "holds something.")
+
+
 @dataclass(frozen=True)
 class Settings:
     model: str = "anthropic/claude-haiku-5-5"
     wire: str = ""  # "" = messages for anthropic/*, else chat
     base_url: str | None = None
     api_key_env: str | None = None
-    effort: str | None = "low"
+    effort: str | None = "medium"
     max_calls: int = 40  # model calls per episode
     max_usd_episode: float | None = 1.0
     max_usd_total: float | None = None  # this process, over every episode
     images: str = "always"  # or on_demand: no images unless the model calls take_pic
     image_horizon: int | None = None  # None keeps every image (append-only history; see NOTES.md)
-    notes: str | None = None  # system prompt additions (the agent's eval_notes)
+    notes: str | None = DEFAULT_NOTES  # the agent's eval_notes: DEFAULT_NOTES, then the endpoint's additions
     max_speed_frac: float = 0.1
     keys: Mapping[str, str] = field(default_factory=dict, repr=False)
 
@@ -71,12 +79,12 @@ class Settings:
         horizon = e.get("PGS_AGENT_IMAGE_HORIZON", "").strip()
         s = cls(model=e.get("PGS_AGENT_MODEL") or cls.model, wire=e.get("PGS_AGENT_WIRE", ""),
                 base_url=e.get("PGS_AGENT_BASE_URL") or None, api_key_env=e.get("PGS_AGENT_API_KEY_ENV") or None,
-                effort=(e.get("PGS_AGENT_EFFORT") or "low") if e.get("PGS_AGENT_EFFORT", "") != "default" else None,
+                effort=(e.get("PGS_AGENT_EFFORT") or "medium") if e.get("PGS_AGENT_EFFORT", "") != "default" else None,
                 max_calls=int(e.get("PGS_AGENT_MAX_CALLS") or 40),
                 max_usd_episode=num("PGS_AGENT_MAX_USD_EPISODE", 1.0), max_usd_total=num("PGS_AGENT_MAX_USD", None),
                 images=e.get("PGS_AGENT_IMAGES") or "always",
                 image_horizon=int(horizon) if horizon not in ("", "none") else None,
-                notes=e.get("PGS_AGENT_NOTES") or None, max_speed_frac=float(e.get("PGS_AGENT_MAX_SPEED_FRAC") or 0.1),
+                notes="\n".join(x for x in (DEFAULT_NOTES, e.get("PGS_AGENT_NOTES")) if x), max_speed_frac=float(e.get("PGS_AGENT_MAX_SPEED_FRAC") or 0.1),
                 keys={k: e[k] for k in key_names if e.get(k)})
         s.check(e)
         return s
@@ -93,7 +101,7 @@ class Settings:
         """The settings without keys, for the metadata and logs."""
         return {"model": self.model, "wire": self.resolved_wire, "base_url": self.base_url, "effort": self.effort,
                 "max_calls": self.max_calls, "max_usd_episode": self.max_usd_episode, "max_usd_total": self.max_usd_total,
-                "images": self.images, "image_horizon": self.image_horizon, "notes": bool(self.notes)}
+                "images": self.images, "image_horizon": self.image_horizon, "notes": bool(self.notes and self.notes != DEFAULT_NOTES)}
 
 
 def make_policy(s: Settings, transport: Any = None):
@@ -161,7 +169,7 @@ class Driver:
         self.settle_left = 0
         self.best, self.stall, self.grip_wait = math.inf, 0, 0
         d = card.native.get("eef_delta") or {}
-        self.d = {"track": 0.2, "arrive_m": 0.004, "arrive_deg": 2.0, "settle_steps": 60, "stall_steps": 15, "grip_steps": 15, **d}
+        self.d = {"track": 0.2, "gain": 1.0, "arrive_m": 0.004, "arrive_deg": 2.0, "settle_steps": 60, "stall_steps": 15, "grip_steps": 15, **d}
 
     def state(self, request: dict) -> np.ndarray:
         value = llm_card.lookup(request, self.card.native["state"])
@@ -243,7 +251,7 @@ class Driver:
             return out
         d = self.d
         p, R, _ = self._pose(x)
-        ps, rs, track = float(d["position_scale"]), float(d["rotation_scale"]), float(d["track"])
+        ps, rs, track, gain = float(d["position_scale"]), float(d["rotation_scale"]), float(d["track"]), float(d["gain"])
         for k in range(n):
             if self.queue:
                 self.held = self.queue.pop(0)
@@ -255,9 +263,9 @@ class Driver:
             if not self.queue:
                 self.grip_wait -= 1  # the gripper's new command has reached its target: count its closing time
             target = self.held
-            a = np.clip((target[:3] - p) / ps, -1, 1)
+            a = np.clip(gain * (target[:3] - p) / ps, -1, 1)
             p = p + a * ps * track
-            r = np.clip(llm_card.axis_angle(llm_card.from_rot6d(target[3:9]) @ R.T) / rs, -1, 1)
+            r = np.clip(gain * llm_card.axis_angle(llm_card.from_rot6d(target[3:9]) @ R.T) / rs, -1, 1)
             R = llm_card.rotation(r * rs * track) @ R
             out[k, slice(*d["action_position"])] = a
             out[k, slice(*d["action_rotation"])] = r

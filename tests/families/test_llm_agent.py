@@ -50,6 +50,7 @@ class Libero:
              "observation/state": self.state.astype(np.float32), "prompt": "pick up the black bowl"}
         if self.episode:
             r["episode"] = self.episode
+            r["max_steps"] = 220
         if card is not None:
             r["embodiment"] = card
         return r
@@ -133,8 +134,10 @@ def test_episode_on_the_messages_wire():
     assert last["tokens"]["input"] == 3000 and last["usd"] == pytest.approx(3 * (1000 * 0.10 + 60 * 0.50) / 1e6)
     first = fake.requests[0]
     assert first["model"] == "claude-haiku-5-5" and first["thinking"] == {"type": "adaptive"}
-    assert first["output_config"] == {"effort": "low"} and "temperature" not in first and "tool_choice" not in first
-    assert "LIBERO tabletop" in first["system"][0]["text"]  # the card's docs
+    assert first["output_config"] == {"effort": "medium"} and "temperature" not in first and "tool_choice" not in first
+    system = first["system"][0]["text"]
+    assert "Franka Panda" in system and llm_session.DEFAULT_NOTES in system  # the card's docs, the default notes
+    assert "Step budget: step 0/220" in json.dumps(first["messages"])  # max_steps from the request
     assert {t["name"] for t in first["tools"]} == {"move_to", "sleep", "done", "give_up"}
     images = [b for m in first["messages"] for b in (m["content"] if isinstance(m["content"], list) else []) if b.get("type") == "image"]
     assert len(images) == 2
