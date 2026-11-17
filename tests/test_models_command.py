@@ -36,7 +36,8 @@ def test_without_a_key(no_key, capsys):
     for name in models.names():
         spec = models.get(name)
         assert spec.robot in table[name]
-        assert ("ran on GPU " + spec.gpu_validated if spec.gpu_validated else "untested") in table[name]
+        validation = "answered a tool call " if spec.cpu else "ran on GPU "
+        assert (validation + spec.gpu_validated if spec.gpu_validated else "untested") in table[name]
 
 
 class FakeCatalog:

@@ -717,6 +717,7 @@ class Launcher:
         if ep is None:
             if their_eps:
                 raise LauncherError(self._not_yours(model, [("endpoint", e) for e in their_eps]))
+            body["name"] = make_name(model, self._ensure_owner())
             ep = self._create_one(self.api.create_endpoint, body, self.api.list_endpoints)
             self.out(f"Created endpoint {ep['name']} ({ep['id']}).")
         else:
@@ -816,6 +817,15 @@ class Launcher:
         """Bytes of the largest request `up` may send for this env: an endpoint create (an update sends a part of it),
         with its variable parts at their longest: the longest data center id, every GPU type of the model's pools that
         it may exclude, a long volume id."""
+        if getattr(spec, "cpu", ""):
+            flavor, vcpu = spec.cpu.split("-")[:2]
+            entrypoint, cmd = self._start()
+            body = {"name": make_name(model, self.owner or new_owner()), "type": "LOAD_BALANCER", "image": spec.image,
+                    "entrypoint": entrypoint, "cmd": [c.replace("/rs/boot.sh", "/rs/start.sh") for c in cmd],
+                    "ports": list(PORTS), "disk": AGENT_DISK_GB, "env": env,
+                    "cpu": [{"id": flavor, "vcpuCount": int(vcpu)}], "workers": dict(want), "scaling": dict(SCALING),
+                    "flashboot": FLASHBOOT, "timeout": TIMEOUT_MS}
+            return len(encode(body))
         excluded = sorted({i for p in spec.gpu_pools for i in pool_types(gpus, p, spec.min_container_ram_gb)[1]})
         gpu = {"pools": [max(spec.gpu_pools, key=len)], "count": 1, "minCudaVersion": spec_cuda(spec) or "",
                "excludedTypes": excluded}
