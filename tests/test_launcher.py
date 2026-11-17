@@ -244,7 +244,7 @@ def test_up_creates_volume_then_endpoint_and_prints_prices_first(env):
     assert NAME.fullmatch(vol_body["name"]) and NAME.fullmatch(ep_body["name"])
     assert ep_body["type"] == "LOAD_BALANCER" and ep_body["dataCenterIds"] == ["US-IL-1"]
     assert ep_body["gpu"] == {"pools": ["ADA_24"], "count": 1, "minCudaVersion": "12.8", "excludedTypes": ["SMALL-RAM"]}
-    assert ep_body["env"] == released(make_env(None, "0.1.0")) and ep_body["ports"] == ["8000/http", "8001/http"]
+    assert ep_body["env"] == released(make_env(None, RELEASE)) and ep_body["ports"] == ["8000/http", "8001/http"]
     assert ep_body["entrypoint"] == ["bash", "-c"] and ep_body["cmd"] == [START[2]]
     assert ep_body["workers"] == DEFAULT and ep_body["scaling"] == {"type": "REQUEST_COUNT", "requestCount": 4}
     assert ep_body["flashboot"] == "OFF" and vol_body["name"][:26] == ep_body["name"][:26]  # same owner id
@@ -346,7 +346,7 @@ def test_down_then_up_sends_the_complete_env_map_and_workers_object(env):
     api.endpoints[eid]["env"].pop("OPENPI_DATA_HOME")  # and an env edited outside the tool
     launcher().up("pi05_libero")
     patches = [c[2] for c in api.calls if c[0] == "update_endpoint"][-2:]
-    assert patches[0]["env"] == released(make_env(None, "0.1.0"))  # every key, not just the changed one
+    assert patches[0]["env"] == released(make_env(None, RELEASE))  # every key, not just the changed one
     assert "workers" not in patches[0]  # the readiness requests wake the worker; the workers object once it serves
     assert patches[1] == {"workers": DEFAULT}
     assert api.endpoints[eid]["env"]["OPENPI_DATA_HOME"] == "/runpod-volume/openpi_data"
@@ -686,7 +686,7 @@ def test_real_models_and_bundle_fit_the_launcher(tmp_path):
     result = Launcher(api, tmp_path / "state.json", out=lambda s: None, sleep=lambda s: None).up("pi05_libero")
     body = [c[1] for c in api.calls if c[0] == "create_endpoint"][0]
     assert body["entrypoint"] + body["cmd"] == list(bundle.START_COMMAND)
-    assert body["env"] == released(bundle.endpoint_env(models.get("pi05_libero"), "0.1.0"))
+    assert body["env"] == released(bundle.endpoint_env(models.get("pi05_libero"), RELEASE))
     assert body["image"] == models.get("pi05_libero").image and body["gpu"]["minCudaVersion"] == "12.8"
     assert NAME.fullmatch(result["endpoint"]["name"])
 

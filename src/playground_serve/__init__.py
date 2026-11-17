@@ -5,7 +5,7 @@
     actions = policy.act(obs)
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __all__ = ["ActionQueue", "History", "Policy", "ServerError", "Status", "connect", "example_obs", "status"]
 
 

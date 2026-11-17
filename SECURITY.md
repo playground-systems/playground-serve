@@ -14,7 +14,7 @@ and the commit you tested. Leave out real API keys and tokens; a placeholder is 
 
 ## Supported versions
 
-Playground Serve is alpha (0.1.0). Fixes go to `main`; there are no release branches.
+Playground Serve is alpha (0.1.1). Fixes go to `main`; there are no release branches.
 
 ## In scope
 
