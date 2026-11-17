@@ -11,7 +11,7 @@ import time
 import pytest
 
 from playground_serve import cli, region, state
-from playground_serve.launcher import Launcher, LauncherError
+from playground_serve.launcher import RELEASE, Launcher, LauncherError
 from playground_serve.runpod_api import ApiError
 from test_launcher import START, FakeApi, get_spec, make_env, released
 
@@ -289,7 +289,7 @@ def test_stock_path_turns_the_fast_path_off_and_back_on(tmp_path):
                             measure=api.measure)
     result = make().up("pi05_libero", stock_path=True)
     eid = result["endpoint"]["id"]
-    want = bundle.endpoint_env(models.get("pi05_libero"), "0.1.0")
+    want = bundle.endpoint_env(models.get("pi05_libero"), RELEASE)
     assert want["RS_FAST"] == "auto" and api.endpoints[eid]["env"] == released({**want, "RS_FAST": "off"})
     make().up("pi05_libero")
     assert api.endpoints[eid]["env"] == released(want)  # a new release: the fast path again

@@ -77,7 +77,7 @@ If this is useful to you, a star helps other robotics people find it.
 
 ## Status
 
-Alpha (0.1.0). What is true today:
+Alpha (0.1.1). What is true today:
 
 - 12 of the 23 model entries have served real actions on a Runpod GPU. The other 11 are registered and untested:
   `pi0_droid`, `pi0_fast_droid`, the five ALOHA entries, three more GR00T N1.7 suites and Cosmos 3 Nano. `pgs models`

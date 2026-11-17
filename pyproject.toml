@@ -1,6 +1,6 @@
 [project]
 name = "playground-serve"
-version = "0.1.0"
+version = "0.1.1"
 description = "Open source serving for robot policies and LLM agents on Runpod"
 readme = "README.md"
 license = "Apache-2.0"
