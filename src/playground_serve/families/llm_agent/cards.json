@@ -101,7 +101,7 @@
      "gripper_closed": 1,
      "gain": 2.5,
      "arrive_m": 0.005,
-     "stall_steps": 10,
+     "stall_steps": 15,
      "settle_steps": 40,
      "grip_steps": 12
     }
