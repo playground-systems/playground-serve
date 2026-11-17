@@ -208,7 +208,7 @@ def reference_field(card: Card) -> str:
 
 
 def state_shapes(card: Card) -> dict[str, tuple[int, ...]]:
-    shapes = {reference_field(card): (len(card.agent["labels"]),)}
+    shapes = {} if card.agent["control_mode"] == "joint_delta" else {reference_field(card): (len(card.agent["labels"]),)}
     if card.kind == "eef_delta":
         s, e = card.native["eef_delta"]["state_fingers"]
         shapes["gripper_qpos"] = (e - s,)
@@ -258,7 +258,8 @@ class Driver:
         """The agent's state fields from the native state vector (and the request, for the card's extra_keys)."""
         out: dict[str, np.ndarray] = {}
         if self.card.kind == "same":
-            out[reference_field(self.card)] = x[: len(self.card.agent["labels"])].copy()
+            if self.card.agent["control_mode"] != "joint_delta":  # a displacement interface has no reference field
+                out[reference_field(self.card)] = x[: len(self.card.agent["labels"])].copy()
         else:
             p, R, opening = self._pose(x)
             g = float(self.held[9]) if self.held is not None else (0.0 if opening > 0.5 else 1.0)
@@ -304,6 +305,8 @@ class Driver:
         return self.settle_left > 0
 
     def hold_row(self, x: np.ndarray) -> np.ndarray:
+        if self.card.native.get("hold") == "zero":  # per-step changes: holding still is zero
+            return np.zeros(self.card.action_size)
         if self.card.kind == "same":
             return (self.held if self.held is not None else x[: self.card.action_size]).copy()
         d = self.d
@@ -316,10 +319,13 @@ class Driver:
         n = self.card.chunk
         out = np.zeros((n, self.card.action_size))
         if self.card.kind == "same":
+            zero = self.card.native.get("hold") == "zero"
             for k in range(n):
                 if self.queue:
                     self.held = self.queue.pop(0)
-                out[k] = self.held if self.held is not None else x[: self.card.action_size]
+                    out[k] = self.held
+                else:
+                    out[k] = 0.0 if zero else (self.held if self.held is not None else x[: self.card.action_size])
             return out
         d = self.d
         p, R, _ = self._pose(x)

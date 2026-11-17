@@ -111,7 +111,7 @@ def load(card: Any) -> Card:
     _need(isinstance(agent, dict), "agent must be an object")
     _need(isinstance(native, dict), "native must be an object")
     mode = agent.get("control_mode")
-    _need(mode in ("joint_pos", "eef_abs_pose"), "agent.control_mode must be joint_pos or eef_abs_pose")
+    _need(mode in ("joint_pos", "eef_abs_pose", "joint_delta"), "agent.control_mode must be joint_pos, eef_abs_pose or joint_delta")
     labels, low, high = agent.get("labels"), agent.get("low"), agent.get("high")
     _need(isinstance(labels, list) and labels and all(isinstance(x, str) for x in labels), "agent.labels must name each dimension")
     n = len(labels)
@@ -165,21 +165,29 @@ def from_env_card(env: Any) -> Card:
     a, o = env.get("action") or {}, env.get("observation") or {}
     mode = LAYOUTS.get(a.get("layout"))
     if a.get("layout") == "custom":
-        # A plain MuJoCo scene's own action vector: driven as absolute targets per dimension when it says so, with a
-        # state entry of the same size as the reference; forces, velocities and rates are not.
-        _need(a.get("kind") == "absolute", "embodiment_card.action.layout custom: an LLM agent drives absolute targets only; "
-              "a scene whose actions are absolute targets says action.kind \"absolute\" (forces, velocities and rates are not driven)")
-        mode = "joint_pos"
+        # A plain MuJoCo scene's own action vector, by its action.kind: "absolute" targets per dimension (a state entry of
+        # the same size is the reference; the tool move_joints), or "delta", a change per control step that the box
+        # bounds (the tool move_by splits a total into such steps). Forces, velocities and other rates are not driven.
+        kind = a.get("kind")
+        _need(kind in ("absolute", "delta"), "embodiment_card.action.layout custom needs action.kind \"absolute\" (targets) or "
+              "\"delta\" (a change per control step); an LLM agent does not drive forces, velocities or other rates")
+        mode = "joint_pos" if kind == "absolute" else "joint_delta"
     _need(mode is not None, f"embodiment_card.action.layout must be one of {', '.join([*LAYOUTS, 'custom'])}")
     size = a.get("size")
     states = o.get("state") or []
     refs = [s["name"] for s in states if s.get("size") == size]
     if len(refs) > 1:
         refs = [n for n in refs if n.startswith("eef" if mode == "eef_abs_pose" else "joint")] or refs
-    _need(len(refs) == 1, f"embodiment_card.observation.state needs exactly one entry of the action's size ({size})")
+    if mode == "joint_delta":  # no reference: every state entry is shown as it is
+        _need(bool(states), "embodiment_card.observation.state needs at least one entry")
+        refs = []
+    else:
+        _need(len(refs) == 1, f"embodiment_card.observation.state needs exactly one entry of the action's size ({size})")
     chunk_text = str(a.get("chunk") or "")
     words = chunk_text.split()
-    chunk = next((int(w) for i, w in enumerate(words) if w.isdigit() and i > 0 and words[i - 1] == "first"), 10)
+    rows = a.get("rows")
+    chunk = int(rows) if isinstance(rows, int) and not isinstance(rows, bool) and rows > 0 else next(
+        (int(w) for i, w in enumerate(words) if w.isdigit() and i > 0 and words[i - 1] == "first"), 10)
     robot, task, limits = env.get("robot") or {}, env.get("task") or {}, env.get("limits") or {}
     cams = o.get("cameras") or []
     docs = "\n".join(x for x in [
@@ -198,8 +206,9 @@ def from_env_card(env: Any) -> Card:
         "agent": {"control_mode": mode, "rotation_repr": "rot6d" if mode == "eef_abs_pose" else "none", "gripper": "continuous",
                   "frame": "world" if mode == "eef_abs_pose" else "base", "labels": a.get("labels"), "low": a.get("low"),
                   "high": a.get("high"), "max_step": a.get("maxStep")},
-        "native": {"kind": "same", "state": f"state/{refs[0]}", "state_field": refs[0], "action_size": size,
-                   "extra_keys": {s["name"]: f"state/{s['name']}" for s in states if s["name"] != refs[0]}},
+        "native": {"kind": "same", "state": f"state/{(refs or [states[0]['name']])[0]}", "action_size": size,
+                   **({"state_field": refs[0]} if refs else {"hold": "zero"}),
+                   "extra_keys": {s["name"]: f"state/{s['name']}" for s in states if not refs or s["name"] != refs[0]}},
         **({"max_steps": int(limits["maxSteps"])} if isinstance(limits.get("maxSteps"), int) else {}),
     }
     return load(card)

@@ -345,12 +345,38 @@ def test_the_custom_environments_cards(name, size, chunk, mode):
 
 def test_a_plain_scene_card():
     plain = {"version": 1, "controlHz": 50, "action": {"layout": "custom", "size": 2, "labels": ["force_x_n", "force_y_n"], "low": [-5, -5], "high": [5, 5], "chunk": ""},
-             "observation": {"cameras": [{"name": "front", "width": 224, "height": 224}], "state": [{"name": "block_xy", "size": 2}]}}
-    with pytest.raises(llm_card.CardError, match="absolute targets only"):
+             "observation": {"cameras": [{"name": "front", "width": 64, "height": 64}], "state": [{"name": "block_xy", "size": 2}]}}
+    with pytest.raises(llm_card.CardError, match="does not drive forces"):
         llm_card.from_env_card(plain)
-    absolute = {**plain, "action": {**plain["action"], "kind": "absolute", "labels": ["slider_x", "slider_y"]}}
+    absolute = {**plain, "action": {**plain["action"], "kind": "absolute", "labels": ["slider_x", "slider_y"], "rows": 25}}
     card = llm_card.from_env_card(absolute)
-    assert card.agent["control_mode"] == "joint_pos" and card.native["state_field"] == "block_xy"
+    assert card.agent["control_mode"] == "joint_pos" and card.native["state_field"] == "block_xy" and card.chunk == 25
+    delta = {**plain, "action": {**plain["action"], "kind": "delta", "labels": ["dx", "dy"], "low": [-0.01, -0.01], "high": [0.01, 0.01]}}
+    card = llm_card.from_env_card(delta)
+    assert card.agent["control_mode"] == "joint_delta" and card.native["hold"] == "zero"
+    pol, fake = policy(turns=[{"tool": "move_by", "arguments": {"deltas": {"dx": 0.05}, "note": "push"}}] * 3)
+    r = {"images": {"front": np.full((64, 64, 3), 9, np.uint8)}, "state": {"block_xy": np.array([0.1, 0.2])}, "prompt": "push the block",
+         "embodiment_card": json.dumps(delta), "reset": True}
+    out = pol.infer(r, "c1")["actions"]
+    assert out.shape == (10, 2) and abs(out[:, 0].sum() - 0.05) < 1e-4 and out[:, 0].max() <= 0.01 and out[-1, 0] == 0 and np.allclose(out[:, 1], 0)
+
+
+def test_a_two_arm_pose_card():
+    """Both arms' hands as absolute poses (each x, y, z, rot6d, gripper): the interface a two-arm scene with its own IK
+    would offer (the Jenga scene's, for one)."""
+    arm = lambda s: [f"{s}_{k}" for k in ("x", "y", "z", "r00", "r10", "r20", "r01", "r11", "r21", "gripper")]  # noqa: E731
+    env = {"version": 1, "controlHz": 50, "robot": {"name": "yam_bimanual", "arms": 2},
+           "action": {"layout": "eef_abs_pose_rot6d", "size": 20, "labels": arm("left") + arm("right"),
+                      "low": ([-0.5, -0.6, 0.0] + [-1] * 6 + [0]) * 2, "high": ([0.5, 0.6, 0.6] + [1] * 6 + [1]) * 2, "rows": 25},
+           "observation": {"cameras": [{"name": "top", "width": 64, "height": 64}], "state": [{"name": "eef_state", "size": 20}, {"name": "wrist_force_n", "size": 2}]}}
+    pol, fake = policy(turns=[{"tool": "move_to", "arguments": {"targets": {"left_z": 0.2, "right_z": 0.25}, "note": "lower both"}}] * 2)
+    pose = np.array(([0.1, 0.3, 0.3] + [1, 0, 0, 0, -1, 0] + [0.0]) * 2)
+    r = {"images": {"top": np.full((64, 64, 3), 9, np.uint8)}, "state": {"eef_state": pose, "wrist_force_n": np.array([0.0, 1.5])},
+         "prompt": "lift the block", "embodiment_card": json.dumps(env), "reset": True}
+    out = pol.infer(r, "c1")["actions"]
+    assert out.shape == (25, 20) and out[-1, 2] < 0.3 and out[-1, 12] < 0.3
+    assert "state[wrist_force_n]" in json.dumps(fake.requests[0]["messages"])
+
 
 
 def test_zoom_and_motion_reports():
