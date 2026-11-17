@@ -164,7 +164,13 @@ def from_env_card(env: Any) -> Card:
     _need(isinstance(env, dict) and env.get("version") == 1, "embodiment_card must be an object with version 1")
     a, o = env.get("action") or {}, env.get("observation") or {}
     mode = LAYOUTS.get(a.get("layout"))
-    _need(mode is not None, f"embodiment_card.action.layout must be one of {', '.join(LAYOUTS)}")
+    if a.get("layout") == "custom":
+        # A plain MuJoCo scene's own action vector: driven as absolute targets per dimension when it says so, with a
+        # state entry of the same size as the reference; forces, velocities and rates are not.
+        _need(a.get("kind") == "absolute", "embodiment_card.action.layout custom: an LLM agent drives absolute targets only; "
+              "a scene whose actions are absolute targets says action.kind \"absolute\" (forces, velocities and rates are not driven)")
+        mode = "joint_pos"
+    _need(mode is not None, f"embodiment_card.action.layout must be one of {', '.join([*LAYOUTS, 'custom'])}")
     size = a.get("size")
     states = o.get("state") or []
     refs = [s["name"] for s in states if s.get("size") == size]

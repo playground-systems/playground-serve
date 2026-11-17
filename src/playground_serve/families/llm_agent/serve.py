@@ -15,7 +15,8 @@ Request keys, besides the observation in the card's own keys (its cameras, its n
     "embodiment_card", "reset"  a custom environment's card and episode start (Playground Bench's docs/cloud/CUSTOM.md,
                   section 10): the card in its own shape (llm_card.from_env_card), sent with an episode's first request
                   together with reset: true. Each reset starts a new episode on the connection.
-A request whose images are all black is a warm-up: it gets a holding chunk, and no episode starts.
+A request whose images are all black, with no episode id and no reset, that would start an episode is a warm-up: it
+gets a holding chunk, and no episode starts.
 
 Reply: "actions" float32 (chunk, action_size) in the card's native layout, and "agent": {episode, card, model, calls,
 tokens {input, output, cache_read, cache_write}, usd (null for a model with no price), model_seconds, steps,
@@ -105,15 +106,16 @@ class AgentPolicy:
 
     def infer(self, request: dict, conn: str) -> dict:
         card = self._card(request, conn)
-        if warm_up(request):
-            x = llm_session.Driver(card).state(request)
-            rows = np.stack([llm_session.Driver(card).hold_row(x)] * card.chunk)
-            return {"actions": rows.astype(np.float32), "agent": {"warm_up": True, "card": card.name}}
         episode = request.get("episode")
         prompt = str(llm_card.lookup(request, card.prompt) or "")
+        marked = episode not in (None, "") or request.get("reset") is True
         if request.get("reset") is True:
             self.resets[conn] = self.resets.get(conn, 0) + 1
         key = f"e:{episode}" if episode not in (None, "") else f"c:{conn}:{self.resets.get(conn, 0)}:{prompt}"
+        if not marked and key not in self.sessions and warm_up(request):
+            x = llm_session.Driver(card).state(request)
+            rows = np.stack([llm_session.Driver(card).hold_row(x)] * card.chunk)
+            return {"actions": rows.astype(np.float32), "agent": {"warm_up": True, "card": card.name}}
         with self.lock:
             self._expire()
             session = self.sessions.get(key)

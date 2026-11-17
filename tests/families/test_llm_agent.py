@@ -183,7 +183,7 @@ def test_episodes_by_id_and_by_connection():
 
 def test_warm_up_request_calls_no_model():
     pol, fake = policy()
-    r = Libero().request()
+    r = Libero(episode=None).request()
     r["observation/image"][:] = 0
     r["observation/wrist_image"][:] = 0
     out = pol.infer(r, "c1")
@@ -309,3 +309,38 @@ def test_custom_environment_two_arm_card():
     assert card.agent["control_mode"] == "joint_pos" and card.chunk == 25 and card.native["state_field"] == "joint_pos"
     info = llm_session.embodiment_info(card, {"cam_high": (224, 224)})
     assert info.action_space.semantics.control_mode == "joint_pos" and info.control_hz == 50
+
+
+DATA = pathlib.Path(__file__).resolve().parent / "data"
+
+
+@pytest.mark.parametrize("name,size,chunk,mode", [("env_card_panda", 10, 10, "eef_abs_pose"), ("env_card_yam", 14, 25, "joint_pos")])
+def test_the_custom_environments_cards(name, size, chunk, mode):
+    """The cards that Playground Bench's custom environments make for their two robots (cloud/envs/card.ts
+    embodimentCard, written to tests/families/data): an episode answers absolute rows inside the card's box."""
+    env = json.loads((DATA / f"{name}.json").read_text())
+    card = llm_card.from_env_card(env)
+    assert (card.action_size, card.chunk, card.agent["control_mode"], card.max_steps) == (size, chunk, mode, env["limits"]["maxSteps"])
+    target = {"z": 0.9} if mode == "eef_abs_pose" else {"left_joint1": 0.3}
+    pol, fake = policy(turns=[{"tool": "move_to" if mode == "eef_abs_pose" else "move_joints", "arguments": {"targets": target, "note": "move"}}] * 3)
+    rng = np.random.default_rng(0)
+    cams = {c["name"]: rng.integers(1, 255, (c["height"], c["width"], 3), dtype=np.uint8) for c in env["observation"]["cameras"]}
+    low, high = np.array(env["action"]["low"]), np.array(env["action"]["high"])
+    if mode == "eef_abs_pose":
+        state = {"eef_state": np.array([0.5, 0.0, 1.0, 1, 0, 0, 0, -1, 0, 0.0]), "gripper_qpos": np.array([0.04, -0.04])}
+    else:
+        state = {"joint_pos": np.clip(np.zeros(14), low, high)}
+    out = pol.infer({"images": cams, "state": state, "prompt": "put the red block in the bowl", "embodiment_card": json.dumps(env), "reset": True}, "c1")
+    rows = out["actions"]
+    assert rows.shape == (chunk, size) and np.all(rows >= low - 1e-6) and np.all(rows <= high + 1e-6)
+    assert fake.requests and "Step budget: step 0/" in json.dumps(fake.requests[0]["messages"])
+
+
+def test_a_plain_scene_card():
+    plain = {"version": 1, "controlHz": 50, "action": {"layout": "custom", "size": 2, "labels": ["force_x_n", "force_y_n"], "low": [-5, -5], "high": [5, 5], "chunk": ""},
+             "observation": {"cameras": [{"name": "front", "width": 224, "height": 224}], "state": [{"name": "block_xy", "size": 2}]}}
+    with pytest.raises(llm_card.CardError, match="absolute targets only"):
+        llm_card.from_env_card(plain)
+    absolute = {**plain, "action": {**plain["action"], "kind": "absolute", "labels": ["slider_x", "slider_y"]}}
+    card = llm_card.from_env_card(absolute)
+    assert card.agent["control_mode"] == "joint_pos" and card.native["state_field"] == "block_xy"
