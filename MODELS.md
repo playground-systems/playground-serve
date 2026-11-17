@@ -153,22 +153,47 @@ gives the exact graph path (bit-identical to stock, 37.0 ms).
   5090 saves over the A40, so it stays first there; for Flex-π it saves 6.7 ms, so the A40 is first and `pgs up
   flex_pi_libero --gpu "RTX 5090"` picks the 5090.
 
-## LLM agents (no GPU)
+## LLM agents
 
-`families/llm_agent/` serves a language model as a robot policy behind the same websocket wire. The agent loop is
-Inspect Robots' LLM agent policy (`inspect-robots-agent`, MIT, a pinned dependency): the model sees the state as text and
-the camera images and calls tools (`move_to` or `move_joints`, `sleep`, `take_pic`, `done`, `give_up`); the server turns
-the targets into the environment's actions. Any provider of that package works: Anthropic, OpenAI, Google, xAI, Groq,
-Mistral, DeepSeek, OpenRouter, and any OpenAI-compatible server by base URL. Each episode starts from an embodiment
-card that the client sends (the robot, its action space, its cameras and keys; built-in: `libero_franka`).
-[NOTES.md](src/playground_serve/families/llm_agent/NOTES.md) has the design, the harnesses compared, the providers'
-test status and the measurements; its Wire section the request and reply keys.
+Nine language models that drive a robot through tool calls, each a registry entry of the `llm_agent` family
+(`families/llm_agent/`), served behind the same websocket wire as every other model. The model runs at its provider and
+is reached through OpenRouter; the endpoint is a CPU worker (Runpod `cpu3c`, 2 vCPU, 0.072 USD an hour while it runs, no
+volume) that holds the agent loop. The loop is Inspect Robots' LLM agent policy (`inspect-robots-agent`, MIT, a pinned
+dependency): the model sees the state as text and the camera images and calls tools (`move_to` or `move_joints`,
+`sleep`, `zoom`, `done`, `give_up`), and the server turns the targets into the environment's actions. Each episode
+starts from an embodiment card that the client sends (the robot, its action space, its cameras and keys; built-in:
+`libero_franka`).
 
-It has no `spec.py`, so it is not a registry entry and `pgs up` does not create it yet: it runs on a CPU worker without
-a volume, which the launcher does not make. Run it on any machine with the packages of its `requirements.txt`:
+| Model | Title | OpenRouter model | Reasoning | USD per million tokens (input, output) |
+|---|---|---|---|---|
+| `fable_5_2` | Fable 5.2 | `anthropic/claude-fable-5.2` | medium | 8.00, 40.00 |
+| `opus_5_5` | Opus 5.5 | `anthropic/claude-opus-5.5` | medium | 4.00, 20.00 |
+| `gemini_4_carbon` | Gemini 4 Carbon | `google/gemini-4-carbon` | medium | 2.00, 10.00 |
+| `gemini_4_argon` | Gemini 4 Argon | `google/gemini-4-argon` | medium | 2.00, 10.00 |
+| `gemini_3_8_flash_high` | Gemini 3.8 Flash (high) | `google/gemini-3.8-flash` | high | 0.825, 4.125 |
+| `gpt_6_astra` | GPT-6 Astra | `openai/gpt-6-astra` | medium | 10.00, 50.00 |
+| `gpt_6_1_sol` | GPT 6.1 Sol | `openai/gpt-6.1-sol` | medium | 2.00, 10.00 |
+| `muse_wonder_1_0` | Muse Wonder 1.0 | `meta/muse-wonder` | medium | 4.00, 20.00 |
+| `kimi_3_1` | Kimi 3.1 | `moonshotai/kimi-k3.1-pro` (OpenRouter's only Kimi 3.1 model, K3.1 Pro) | medium | 0.2403, 8.4023 |
+
+Each answered a tool call with two camera images through OpenRouter on 2026-11-17. The prices are OpenRouter's list
+prices; the server caps an episode's spend on OpenRouter's own reported cost. No other model is an agent model.
+
+Serve one: the key is `OPENROUTER_API_KEY` in the environment of the machine that runs `pgs up`, and goes only into the
+endpoint's settings on your Runpod account (its tokens bill to that OpenRouter account).
+
+```bash
+export OPENROUTER_API_KEY=...       # your OpenRouter key
+pgs up opus_5_5                      # prints the wss:// URL; `pgs down opus_5_5` when done
+```
+
+Or on any machine with the packages of `families/llm_agent/requirements.txt`:
 
 ```bash
 D=src/playground_serve
-PYTHONPATH=$D/families/llm_agent:$D/families/common:$D/worker ANTHROPIC_API_KEY=... \
-  PGS_AGENT_MODEL=anthropic/claude-haiku-5-5 python $D/families/llm_agent/serve.py --port 8000
+PYTHONPATH=$D/families/llm_agent:$D/families/common:$D/worker OPENROUTER_API_KEY=... \
+  PGS_AGENT_MODEL=opus_5_5 python $D/families/llm_agent/serve.py --port 8000
 ```
+
+[NOTES.md](src/playground_serve/families/llm_agent/NOTES.md) has the design, the harnesses compared, the request and
+reply keys and the measurements.
