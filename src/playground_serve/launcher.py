@@ -722,6 +722,7 @@ class Launcher:
         if ep is None:
             if their_eps:
                 raise LauncherError(self._not_yours(model, [("endpoint", e) for e in their_eps]))
+            body["name"] = make_name(model, self._ensure_owner())
             ep = self._create_one(self.api.create_endpoint, body, self.api.list_endpoints)
             self.out(f"Created endpoint {ep['name']} ({ep['id']}).")
         else:

@@ -79,6 +79,9 @@ def parser() -> argparse.ArgumentParser:
     g.add_argument("--adopt", nargs="?", const=True, metavar="ID", help="take over this model's endpoint that another "
                    "owner (or a `pgs` from before owner ids) created")
     g.add_argument("--new", action="store_true", help="create your own even if another owner has one for this model")
+    s = sub.add_parser("local", help="run an LLM agent on this machine (no Runpod worker)")
+    s.add_argument("model", help="LLM agent model, for example opus_5_5")
+    s.add_argument("--port", type=int, default=8000, help="local websocket port (default 8000)")
     s = sub.add_parser("demo", parents=[common], help="send a dummy observation to a running model and print the "
                        "actions' shape and the round trip (openpi LIBERO models and families with an example "
                        "observation; starts a worker if none runs)")
@@ -128,6 +131,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     key = ""
     try:
+        if args.command == "local":
+            from .local_agent import run
+
+            return run(args.model, args.port, out=say)
         if args.command == "run" and WS_URL.match(args.model or ""):
             key = resolve_key(None, args.key_file) or ""  # a ws:// URL of your own server needs no Runpod key
         else:

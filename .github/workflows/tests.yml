@@ -56,6 +56,21 @@ jobs:
       - run: uv sync --locked
       - run: uv run --locked pytest -q -rs
 
+  local-agent:
+    name: local LLM agent
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.11"
+      - run: uv sync --locked --no-dev --extra llm
+      - run: uv pip install pytest
+      - run: .venv/bin/python -m pytest -q tests/test_local_agent.py tests/families/test_llm_agent.py tests/test_security.py
+
   client-py311:
     # Exercise installation from package metadata independently of the development lock.
     name: client (Python 3.11)
@@ -74,21 +89,6 @@ jobs:
       - run: uv venv --python 3.11 .venv-py311
       - run: uv pip install --python .venv-py311/bin/python -e . 'pytest>=8.3' 'typing-extensions>=4.16.0' "$OPENPI_CLIENT"
       - run: .venv-py311/bin/python -m pytest -q -rs tests/client tests/test_connect.py tests/test_status.py
-
-  agent-tests:
-    name: LLM agent protocol
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
-        with:
-          version: ${{ env.UV_VERSION }}
-          python-version: "3.11"
-          enable-cache: true
-      - run: uv run --locked --with inspect-robots==1.0.0 --with inspect-robots-agent==0.30.0 --with httpx==0.28.1 pytest -q tests/families/test_llm_agent.py tests/test_security.py
 
   release-check:
     name: release check
