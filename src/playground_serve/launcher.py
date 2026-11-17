@@ -64,6 +64,7 @@ PORTS = ["8000/http", "8001/http"]  # websocket on PORT 8000, health on PORT_HEA
 # public address; worker/direct.py), and RS_DIRECT tells it so. A client then sends its requests there.
 DIRECT_PORT, DIRECT_KEY = 8002, "RS_DIRECT"
 DISK_GB = 50
+AGENT_DISK_GB = 10  # an LLM agent's CPU worker: Runpod gives cpu3c 10 GB of container disk per vCPU
 # Default: no worker kept. A worker that a request or a client started stays IDLE_MIN after the last one ends (long
 # enough for a first start's volume fill, 84 to 139 s after ready), then stops and billing stops.
 IDLE_MIN = 5
@@ -588,6 +589,8 @@ class Launcher:
         (default: the nearest with stock, measured); `gpu`: a Runpod pool to use instead of the model's own pools;
         `direct`: the worker also serves on a port of its own public address (an endpoint made with it keeps it)."""
         spec = self._spec(model)
+        if getattr(spec, "cpu", ""):  # an LLM agent: a CPU worker, no volume
+            return self._up_agent(spec, workers(warm, idle_min))
         if gpu:
             spec = dataclasses.replace(spec, gpu_pools=[gpu])
         model = spec.name
@@ -683,6 +686,48 @@ class Launcher:
                                                   if want["min"] >= 1 else "Without it the worker stops by itself "
                                                   f"{idle_text(want['idleTimeout'])} after the last request."))
         return {"endpoint": ep, "volume": vol, "url": url}
+
+    def _up_agent(self, spec, want: dict) -> dict:
+        """An LLM agent (families/llm_agent): a load-balancing endpoint on a CPU worker of spec.cpu, no volume, the image
+        spec.image, the family's start.sh in place of boot.sh, and the model's key (spec.secrets) from this machine."""
+        import json
+
+        from . import models
+
+        model = spec.name
+        env = {**self._env(spec), **secret_env(spec)}
+        env = {**env, RELEASE_KEY: release_id(env)}
+        release = env[RELEASE_KEY]
+        ep, _, (their_eps, _) = self.reconcile(model, self.api.list_endpoints(), [])
+        flavor, vcpu = spec.cpu.split("-")[:2]
+        entrypoint, cmd = self._start()
+        body = {"name": make_name(model, self.owner), "type": "LOAD_BALANCER", "image": spec.image, "entrypoint": entrypoint,
+                "cmd": [c.replace("/rs/boot.sh", "/rs/start.sh") for c in cmd], "ports": list(PORTS), "disk": AGENT_DISK_GB,
+                "env": env, "cpu": [{"id": flavor, "vcpuCount": int(vcpu)}], "workers": dict(want), "scaling": dict(SCALING),
+                "flashboot": FLASHBOOT, "timeout": TIMEOUT_MS}
+        size = len(json.dumps(body).encode())
+        if size > MAX_REQUEST_BYTES:
+            raise LauncherError(f"{model}: the endpoint request would be {size:,} bytes, over the {MAX_REQUEST_BYTES:,} that Runpod takes")
+        price = models.CPU_PRICES.get(flavor, 0.0) * int(vcpu)
+        agent = getattr(spec, "agent", {}) or {}
+        self.out(f"{model}: {agent.get('title', model)} through OpenRouter ({agent.get('slug', '')}), the agent loop on a CPU "
+                 f"worker ({flavor}, {vcpu} vCPU): {price:.3f} USD/hr while it runs; the model's tokens bill to the "
+                 "OPENROUTER_API_KEY it was given.")
+        t0 = self.clock()
+        if ep is None:
+            if their_eps:
+                raise LauncherError(self._not_yours(model, [("endpoint", e) for e in their_eps]))
+            ep = self._create_one(self.api.create_endpoint, body, self.api.list_endpoints)
+            self.out(f"Created endpoint {ep['name']} ({ep['id']}).")
+        else:
+            ep = self._update(ep, {"env": env, "workers": dict(want)})
+        self._record(model, ep, None)
+        self._save()
+        self._wait_ready(ep, FIRST_BOOT_TIMEOUT_S, t0, want, release)
+        url = ws_url(ep)
+        self.out(f"\nReady after {fmt_elapsed(self.clock() - t0)}.\nWebsocket: {url}\n" + billing(model, want, price)
+                 + "\nEach episode sends its embodiment card (MODELS.md, LLM agents). When done: `pgs down`.")
+        return {"endpoint": ep, "volume": None, "url": url}
 
     def _plan(self, c: Candidate, spec, vol: dict | None, how: str, want: dict) -> None:
         ms = region.fresh(self.data.get("probes"), c.dc, self.now())

@@ -27,6 +27,9 @@ numpy and this module, but not the worker side (pgs_server, torch, the model's c
 - experimental: slow or not fully verified (owner's label): `pgs models` and MODELS.md mark it, `pgs up` says so.
 - min_cuda: the lowest host CUDA version the family's environment needs ("13.0" for CUDA 13 wheels, which need driver
   580 or newer), when it is above the image's (12.8); `pgs up` asks Runpod for hosts with at least that.
+- cpu: a CPU worker in place of a GPU pool ("cpu3c-2": Runpod's flavor and vCPUs), for a family that runs no model on
+  the worker (llm_agent); gpu_pools is then empty and the endpoint has no volume.
+- agent: an llm_agent entry's route (provider, slug, title, reasoning effort, output limit, prices per million tokens).
 """
 
 from __future__ import annotations
@@ -68,6 +71,8 @@ class ProposedSpec:
     hosted_id: str = ""
     experimental: bool = False
     min_cuda: str = ""
+    cpu: str = ""  # a CPU worker (Runpod flavor and vCPUs, such as cpu3c-2) in place of gpu_pools, which is then empty
+    agent: dict = dataclasses.field(default_factory=dict)  # an llm_agent entry's route: provider, slug, title, prices
 
     def endpoint_env(self) -> dict[str, str]:
         """The env the family's boot.sh and serve.py read, as playground_serve.bundle.family_env adds it (that map has

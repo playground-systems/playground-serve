@@ -41,7 +41,9 @@ def test_openpi_first_and_names_by_family():
 def test_family_bundle_and_env(family):
     module = importlib.import_module(f"playground_serve.families.{family}.spec")
     files = bundle.worker_files(family)
-    assert set(bundle.SHARED_FILES) | set(bundle.COMMON_FILES) | {"serve.py", "build_env.sh"} <= set(files)
+    cpu = any(getattr(s, "cpu", "") for s in (module.SPECS.values() if isinstance(module.SPECS, dict) else module.SPECS))
+    # A CPU family (an LLM agent) installs its packages at start (start.sh) in place of a built environment.
+    assert set(bundle.SHARED_FILES) | set(bundle.COMMON_FILES) | {"serve.py", "start.sh" if cpu else "build_env.sh"} <= set(files)
     assert not set(bundle.NOT_SHIPPED) & set(files)
     for proposed in (module.SPECS.values() if isinstance(module.SPECS, dict) else module.SPECS):
         spec = models.get(proposed.name)
@@ -316,3 +318,26 @@ def test_self_fetch_skips_the_checkpoint_download(tmp_path):
     (tmp_path / "calls").unlink()
     out, calls = run_checkpoint_step(tmp_path, {**env, "RS_SELF_FETCH": "1"})
     assert calls == "" and out == "dir= volume="  # no fetch, and neither stage.py fill nor run_worker sees a copy
+
+
+@pytest.mark.skipif("llm_agent" not in FAMILIES, reason="no llm_agent family")
+def test_up_serves_an_llm_agent_on_a_cpu_worker(tmp_path, monkeypatch):
+    """`pgs up opus_5_5`: a load-balancing endpoint on a CPU worker with no volume, the family's start.sh, the model's
+    name and the OpenRouter key (from this machine) in its env; `pgs models` lists the nine and nothing else."""
+    api, launcher, out = family_launcher(tmp_path)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    with pytest.raises(LauncherError, match="OPENROUTER_API_KEY"):
+        launcher.up("opus_5_5")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    result = launcher.up("opus_5_5")
+    ep = result["endpoint"]
+    assert result["volume"] is None and not api.volumes and ep["cpu"] == [{"id": "cpu3c", "vcpuCount": 2}]
+    assert "gpu" not in ep and ep["image"] == "python:3.12-slim" and "/rs/start.sh" in " ".join(ep["cmd"])
+    assert ep["env"]["RS_MODEL"] == ep["env"]["PGS_AGENT_MODEL"] == "opus_5_5" and ep["env"]["OPENROUTER_API_KEY"] == "sk-or-test"
+    text = "\n".join(out)
+    assert "anthropic/claude-opus-5.5" in text and "0.072 USD/hr" in text and "sk-or-test" not in text
+    assert sorted(models.names("llm_agent")) == sorted(["fable_5_2", "opus_5_5", "gemini_4_carbon", "gemini_4_argon",
+                                                        "gemini_3_8_flash_high", "gpt_6_astra", "gpt_6_1_sol",
+                                                        "muse_wonder_1_0", "kimi_3_1"])
+    row = next(line for line in models.table().splitlines() if line.startswith("kimi_3_1 "))
+    assert "moonshotai/kimi-k3.1-pro" in row and "CPU (cpu3c, 2 vCPU)" in row

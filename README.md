@@ -88,7 +88,7 @@ Alpha (0.1.0). What is true today:
 
 ## Models
 
-`pgs up NAME` takes any entry; `pgs models` lists all 23 with GPU, price, license and status.
+`pgs up NAME` takes any entry; `pgs models` lists the 23 robot models and the nine LLM agents with GPU or CPU, price, license and status.
 
 | Family | Entries | Robot | Default GPU, USD/hr | Model time p50, stock → fast | Status |
 |---|---|---|---|---|---|
@@ -102,6 +102,7 @@ Alpha (0.1.0). What is true today:
 | Flex-π | `flex_pi_libero` | LIBERO | A40, 1.22 | 318.5 → 131.9 ms | ran on a GPU |
 | Cosmos 3 (NVIDIA) | `cosmos3_edge_droid`, `cosmos3_nano_droid` | DROID | RTX 5090, 1.89; Nano: A100, 2.99 | 514.0 → 439.5 ms (Edge) | experimental; Nano untested |
 | FLUX 3 Action (Black Forest Labs) | `flux3_action_droid` | DROID | A40, 1.22 | 3180–3228 ms, stock path only | experimental; needs `HF_TOKEN` |
+| LLM agents (through OpenRouter) | `fable_5_2`, `opus_5_5`, `gemini_4_carbon`, `gemini_4_argon`, `gemini_3_8_flash_high`, `gpt_6_astra`, `gpt_6_1_sol`, `muse_wonder_1_0`, `kimi_3_1` | any robot with an embodiment card | CPU (cpu3c, 2 vCPU), 0.072 | seconds to minutes per model call | answered a tool call with images; needs `OPENROUTER_API_KEY` ([MODELS.md](MODELS.md#llm-agents)) |
 
 Model time is the server's `infer_ms` median on the default GPU. [MODELS.md](MODELS.md) has the p90s, other GPUs,
 first-start times (up to 7:54 for Flex-π) and the conditions. Licenses differ: FLUX 3 Action is non-commercial,
