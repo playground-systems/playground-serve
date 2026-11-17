@@ -69,7 +69,11 @@ class Settings:
 
     @property
     def resolved_wire(self) -> str:
-        return self.wire or ("messages" if self.model.startswith("anthropic/") and not self.base_url else "chat")
+        if self.wire or self.base_url:
+            return self.wire or "chat"
+        # Anthropic's Messages API; OpenAI's Responses API (the Codex models are served there only, and the GPT-6
+        # models call functions on Chat Completions only without reasoning); Chat Completions for the rest.
+        return {"anthropic": "messages", "openai": "responses"}.get(self.model.split("/")[0], "chat")
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Settings":
@@ -109,10 +113,46 @@ def make_policy(s: Settings, transport: Any = None):
     only the key of its own provider, and only to that provider's endpoint (or the endpoint's base URL)."""
     from inspect_robots_agent.policy import LLMAgentPolicy
 
-    return LLMAgentPolicy(model=s.model, base_url=s.base_url, api_key_env=s.api_key_env, wire=s.resolved_wire,
-                          wire_capture=False, max_llm_calls=s.max_calls, effort=s.effort, images=s.images,
-                          image_horizon=s.image_horizon, eval_notes=s.notes, max_speed_frac=s.max_speed_frac,
-                          transport=transport, env=dict(s.keys), transcript_echo=False)
+    meter = Meter(transport)
+    policy = LLMAgentPolicy(model=s.model, base_url=s.base_url, api_key_env=s.api_key_env, wire=s.resolved_wire,
+                            wire_capture=False, max_llm_calls=s.max_calls, effort=s.effort, images=s.images,
+                            image_horizon=s.image_horizon, eval_notes=s.notes, max_speed_frac=s.max_speed_frac,
+                            transport=meter, env=dict(s.keys), transcript_echo=False)
+    policy.pgs_meter = meter
+    return policy
+
+
+class Meter:
+    """An httpx transport around the agent's own (or the default): it reads the usage object of every answered model
+    request, so tokens are counted from the provider's own numbers on every HTTP wire, whatever the agent keeps
+    (inspect-robots-agent 0.30.0 keeps none on the Responses wire)."""
+
+    def __init__(self, inner: Any = None) -> None:
+        import httpx
+
+        self.inner = inner or httpx.HTTPTransport()
+        self.lock = threading.Lock()
+        self.tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+        self.calls = 0
+
+    def handle_request(self, request):
+        response = self.inner.handle_request(request)
+        if response.status_code == 200 and "json" in response.headers.get("content-type", "application/json"):
+            response.read()
+            try:
+                usage = response.json().get("usage")
+            except ValueError:
+                usage = None
+            if usage is not None:
+                t = llm_pricing.wire_tokens(usage)
+                with self.lock:
+                    self.calls += 1
+                    for k in self.tokens:
+                        self.tokens[k] += t[k]
+        return response
+
+    def close(self) -> None:
+        self.inner.close()
 
 
 def embodiment_info(card: Card, sizes: Mapping[str, tuple[int, int]], extra: Mapping[str, tuple[int, ...]] | None = None):
@@ -299,7 +339,7 @@ class Session:
         self.error: str | None = None
         self.usd = 0.0
         self.calls = 0
-        self.usage: dict[str, float] = {}
+        self.tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
         self.seconds = 0.0
         self.instruction = ""
         self.touched = time.monotonic()
@@ -371,18 +411,21 @@ class Session:
         p = self.policy
         if p is None:
             return
-        totals = dict(getattr(p, "_usage_totals", {}) or {})  # inspect-robots-agent 0.30.0: summed per trial
+        meter = getattr(p, "pgs_meter", None)
         self.calls = int(getattr(p, "_calls_used", 0) or 0)
-        usd = llm_pricing.usd(self.settings.model, totals)
+        if meter is None:  # a policy made without make_policy: the agent's own totals
+            self.tokens = llm_pricing.tokens(dict(getattr(p, "_usage_totals", {}) or {}))
+        else:
+            self.tokens = dict(meter.tokens)
+        usd = llm_pricing.usd_of(self.settings.model, self.tokens)
         if usd is not None and usd > self.usd:
             self.ledger.add(usd - self.usd)
             self.usd = usd
-        self.usage = totals
 
     def report(self, turns: list | None = None) -> dict:
         priced = llm_pricing.price(self.settings.model) is not None
         out: dict[str, Any] = {"episode": self.key, "card": self.card.name, "model": self.settings.model, "calls": self.calls,
-                               "tokens": llm_pricing.tokens(self.usage), "usd": round(self.usd, 6) if priced else None,
+                               "tokens": dict(self.tokens), "usd": round(self.usd, 6) if priced else None,
                                "model_seconds": round(self.seconds, 2), "steps": self.steps}
         if self.finished:
             out["finished"] = self.finished

@@ -151,17 +151,18 @@ def test_episode_on_the_messages_wire():
 
 
 @pytest.mark.parametrize("model,env,path", [
-    ("openai/gpt-5.5", {}, "/chat/completions"),
-    ("openai/gpt-5.5", {"PGS_AGENT_WIRE": "responses"}, "/responses"),
+    ("openai/gpt-6-luna", {"PGS_AGENT_WIRE": "chat"}, "/chat/completions"),
+    ("openai/gpt-5.3-codex", {}, "/responses"),  # OpenAI's default wire here
     ("qwen/qwen3-vl", {"PGS_AGENT_BASE_URL": "https://vllm.example.com/v1", "PGS_AGENT_API_KEY_ENV": "OPENAI_API_KEY",
                        "PGS_AGENT_MAX_USD_EPISODE": "none"}, "/chat/completions"),
 ])
 def test_other_wires(model, env, path):
-    pol, fake = policy(env={"PGS_AGENT_PRICE": "1,2", **env} if "PRICE" not in env and model.startswith("openai") else env,
-                       wire_model=model)
+    pol, fake = policy(env=env, wire_model=model)
     sim = Libero()
     replies = run(pol, sim, n=30)
-    assert replies[-1]["agent"]["finished"]["kind"] == "done"
+    last = replies[-1]["agent"]
+    assert last["finished"]["kind"] == "done"
+    assert last["tokens"]["input"] == 3000 and (last["usd"] or 0) > 0 or model.startswith("qwen")  # metered on every wire
     assert abs(sim.state[2] - 1.0) < 0.006
     assert all(r["tools"] for r in fake.requests)
     assert fake.requests and ("input" in fake.requests[0] or "messages" in fake.requests[0])
@@ -210,6 +211,11 @@ def test_settings():
 
 
 def test_pricing_reads_each_wire():
+    assert llm_pricing.wire_tokens({"input_tokens": 1000, "input_tokens_details": {"cached_tokens": 800}, "output_tokens": 50}) == \
+        {"input": 200, "output": 50, "cache_read": 800, "cache_write": 0}
+    assert llm_pricing.wire_tokens({"prompt_tokens": 100, "prompt_tokens_details": {"cached_tokens": 60}, "completion_tokens": 7}) == \
+        {"input": 40, "output": 7, "cache_read": 60, "cache_write": 0}
+    assert llm_pricing.usd_of("openai/gpt-6-luna", {"input": 1_000_000, "output": 0, "cache_read": 1_000_000, "cache_write": 0}) == pytest.approx(0.11)
     assert llm_pricing.tokens({"input_tokens": 10, "cache_read_input_tokens": 90, "output_tokens": 5}) == \
         {"input": 10, "output": 5, "cache_read": 90, "cache_write": 0}
     assert llm_pricing.tokens({"prompt_tokens": 100, "completion_tokens": 7}) == {"input": 100, "output": 7, "cache_read": 0, "cache_write": 0}

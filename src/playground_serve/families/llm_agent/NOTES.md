@@ -94,9 +94,24 @@ whole episode stays far below any context limit: the real episode below used 37K
 A card (`llm_card.py`, built-in `cards.json`) gives the agent's interface as Inspect Robots spaces and the
 environment's native wire. `libero_franka` maps LIBERO's delta actions to an absolute pose interface (x, y, z, rot6d,
 gripper 0 to 1, the interface of the engine's own Inspect Robots embodiment): the server servoes each interpolated
-target with a proportional controller (gain 1 / 0.05 m, 1 / 0.5 rad), then holds the last target until the hand is
-within 4 mm and 2 degrees or stalls for 15 steps (at most 60 steps), and gives a gripper change 15 steps, before it asks
-the model again. A `same` card passes absolute joint or pose targets through unchanged.
+target (at most 1.2 cm per step) with a proportional controller (gain 2.5 / 0.05 m and 2.5 / 0.5 rad), then holds the
+last target until the hand is within 5 mm and 2 degrees or stalls for 15 steps (at most 40 steps), and gives a gripper
+change 12 steps, before it asks the model again. Measured with recorded moves in LIBERO: seven moves of a pick and place
+took 155 control steps (180 with gain 1, 4 mm and 60 steps), each ending within 5 mm. A `same` card passes absolute
+joint or pose targets through unchanged.
+
+The card's docs are about the robot, the workspace, the cameras and time; they hold no hint about any task or object.
+Each observation states the step budget (the client's `max_steps`, or a custom environment's `limits.maxSteps`): the
+step, the steps left, and the docs give the rate (20 steps a second on LIBERO). Every episode also gets the default
+notes (`llm_session.DEFAULT_NOTES`): the scene is simulated, plan against the step budget, look at every camera first,
+read the gripper's state after closing. The default effort is `medium`.
+
+Custom environments' cards (Playground Bench's `cloud/envs/card.ts`; copies of its Panda and two-arm YAM cards in
+`tests/families/data/`) arrive as `embodiment_card` and become `same` cards (`from_env_card`). A plain MuJoCo scene's own
+action layout (`custom`) is driven only when its card says `action.kind: "absolute"`; forces, velocities and rates are
+refused with the reason. Checked against that repository's own episode runner (`env_run.run` with its stand-in session)
+over the websocket: one episode per reset, absolute rows played as sent, the step budget and the success checks in the
+prompt.
 
 ## Keys and logs
 
@@ -105,24 +120,54 @@ Each episode's policy gets a mapping with the provider keys, so a key goes only 
 to the endpoint's own base URL, which must be https). The log has counts: no prompt, image, note or key; httpx's
 request lines are off. Each reply's `agent.turns` gives the client the episode's new messages without images.
 
+Tokens are counted by `Meter`, an httpx transport around the agent's: it reads the usage object of each answered
+request on every HTTP wire (inspect-robots-agent 0.30.0 keeps no usage on the Responses wire, so its own totals would
+miss OpenAI's tokens), and the USD caps use those counts.
+
 ## Measured (this Mac, 2026-11-16)
 
-- Tests: `tests/families/test_llm_agent.py`, recorded tool calls on the Messages, Chat Completions and Responses wires
-  and an OpenAI-compatible base URL, the driver against a stand-in LIBERO, caps, a rejected key, the server over the
-  websocket.
-- Dry run with recorded tool calls: one LIBERO-Spatial episode through the engine's native runtime (vla-eval, the
-  engine's openpi proxy, this server): 44 requests, 8 model calls, each target reached within 3 mm.
-- One real episode, `anthropic/claude-haiku-5-5`, effort low, LIBERO-Spatial task 1: 6 model calls, 2.8 s of model
-  time per call, 24 uncached input, 28,745 cache-read, 8,682 cache-write and 2,888 output tokens, 0.0028 USD. The
-  episode failed: the step limit (220) ran out while the model was still locating the bowl from the wrist camera.
+LIBERO-Spatial task 1 ("pick up the black bowl between the plate and the ramekin and place it on the plate"), 220 steps,
+three episodes per model (vla-eval's first three initial states), effort `medium`, the generic card and notes above,
+through the engine's native runtime and its openpi proxy. Success is LIBERO's own.
+
+| Model | Success | Steps used | Calls | Seconds per call | Tokens per episode (uncached in / cache read / cache write / out) | USD per episode |
+|---|---|---|---|---|---|---|
+| claude-haiku-5-5 | 0 of 3 | 220, 220, 220 | 9, 8, 10 | 3.2, 4.4, 3.0 | about 40 / 65K / 11K / 5.5K | 0.0047, 0.0051, 0.0045 |
+| claude-sonnet-5-5 | 0 of 3 | 220, 220, 220 | 10, 9, 9 | 5.1, 4.3, 4.9 | about 40 / 65K / 10K / 4.6K | 0.089, 0.066, 0.076 |
+| claude-opus-5-5 | 2 of 3 | 145, 220, 150 | 6, 8, 7 | 6.3, 5.4, 5.2 | about 30 / 40K / 7.5K / 3.2K | 0.113, 0.118, 0.098 |
+
+Three episodes per model is a small sample: these counts say what the harness can do, not how the models rank. What the
+transcripts show: Haiku and Sonnet found the bowl and descended to it, then closed the jaws two to four times where the
+fingers met on nothing (the grasp point over the bowl's inside or beside it), and gave up or ran out of steps. Opus
+placed the grasp point on the bowl's rim and lifted it at the first close in every episode; its failure was a bowl
+that slipped out while carried. Depth and reach were not the problem (each target was reached within 5 mm). The change
+most likely to help the others: a sharper view at the moment of grasping (the wrist image is 224 pixels; a crop tool or
+a higher-resolution wrist frame before a close), then the step budget, which a failed grasp uses up.
+
+Earlier (before the step budget and the faster settle): one Haiku episode at effort low, 6 calls, 0.0028 USD, failed.
+
+Tests: `tests/families/test_llm_agent.py`, recorded tool calls on the Messages, Chat Completions and Responses wires and
+an OpenAI-compatible base URL, the driver against a stand-in LIBERO, the custom environments' cards, caps, a rejected
+key, the server over the websocket.
+
+## OpenAI models (read 2026-11-16)
+
+From developers.openai.com/api/docs/pricing and the model pages: the API's Codex model is `gpt-5.3-codex` (deprecated
+there; Responses API only; text and image input; function calling; reasoning effort low to xhigh; 400K context, 128K
+output; 1.75 / 0.175 cached / 14 USD per million tokens). Codex itself now recommends the general models `gpt-6-astra`
+(10 / 1.00 / 50), `gpt-6.1-sol` (2 / 0.10 / 10), `gpt-6.1-terra` (1 / 0.05 / 5) and `gpt-6-luna` (0.10 / 0.01 / 0.50,
+cache writes 0.125): text and image input, function calling on the Responses API (on Chat Completions only with
+reasoning effort `none`), effort none or low to max, 1.05M context. So OpenAI models run on the Responses wire by
+default here. A real run was not possible: the service's OpenAI key answered 429 `credit_balance_exhausted` on the
+first call of a `gpt-6-luna` episode (the server failed the request after the agent's retries, as designed).
 
 ## Provider status
 
 | Provider (wire) | Status |
 |---|---|
-| Anthropic, Messages API | one real episode (Claude Haiku 5.5); recorded responses in tests |
+| Anthropic, Messages API | 10 real LIBERO episodes (Claude Haiku, Sonnet and Opus 5.5); recorded responses in tests |
+| OpenAI, Responses API (default for openai/*) | recorded responses in tests; the real API refused the key (no credit) |
 | OpenAI, Chat Completions | recorded responses in tests only; never met the real API here |
-| OpenAI, Responses API | recorded responses in tests only; never met the real API here |
 | OpenAI-compatible base URL (vLLM, Ollama, Together, Fireworks, OpenRouter) | recorded responses in tests only |
 | Google: OpenAI-compatible endpoint, Interactions, Live | not tested here (upstream tests only) |
 | x-ai, groq, mistralai, deepseek | not tested here (upstream tests only) |
@@ -131,5 +176,4 @@ request lines are off. Each reply's `agent.turns` gives the client the episode's
 
 - `pgs up` does not create this family's endpoint: it is a CPU endpoint without a volume, which the launcher does not
   make yet. Playground Bench's compute plane creates it; `start.sh` is its boot.
-- Code-as-policy mode, and a card for any robot other than LIBERO's Panda.
-- The step limit is passed only when the client sends `max_steps`; the engine's proxy does not yet.
+- Code-as-policy mode; a crop or zoom tool for the grasp; a card for LIBERO's floor and living-room scenes.
