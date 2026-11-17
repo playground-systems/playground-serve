@@ -6,6 +6,7 @@ Needs inspect-robots and inspect-robots-agent (families/llm_agent/requirements.t
 from __future__ import annotations
 
 import json
+import importlib.util
 import pathlib
 import sys
 
@@ -26,7 +27,10 @@ import llm_card  # noqa: E402
 import llm_fake  # noqa: E402
 import llm_pricing  # noqa: E402
 import llm_session  # noqa: E402
-import serve  # noqa: E402
+# Other families also have a serve.py; select this file independently of collection order.
+_server_spec = importlib.util.spec_from_file_location("llm_agent_test_server", FAMILY / "serve.py")
+serve = importlib.util.module_from_spec(_server_spec)
+_server_spec.loader.exec_module(serve)
 
 TURNS = [
     {"tool": "move_to", "arguments": {"targets": {"z": 1.0}, "note": "lower toward the bowl"}},
