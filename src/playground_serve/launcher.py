@@ -687,6 +687,14 @@ class Launcher:
                                                   f"{idle_text(want['idleTimeout'])} after the last request."))
         return {"endpoint": ep, "volume": vol, "url": url}
 
+    def _agent_body(self, spec, env: dict, want: dict) -> dict:
+        flavor, vcpu = spec.cpu.split("-")[:2]
+        entrypoint, cmd = self._start()
+        return {"name": make_name(spec.name, self.owner), "type": "LOAD_BALANCER", "image": spec.image, "entrypoint": entrypoint,
+                "cmd": [c.replace("/rs/boot.sh", "/rs/start.sh") for c in cmd], "ports": list(PORTS), "disk": AGENT_DISK_GB,
+                "env": env, "cpu": [{"id": flavor, "vcpuCount": int(vcpu)}], "workers": dict(want), "scaling": dict(SCALING),
+                "flashboot": FLASHBOOT, "timeout": TIMEOUT_MS}
+
     def _up_agent(self, spec, want: dict) -> dict:
         """An LLM agent (families/llm_agent): a load-balancing endpoint on a CPU worker of spec.cpu, no volume, the image
         spec.image, the family's start.sh in place of boot.sh, and the model's key (spec.secrets) from this machine."""
@@ -700,11 +708,7 @@ class Launcher:
         release = env[RELEASE_KEY]
         ep, _, (their_eps, _) = self.reconcile(model, self.api.list_endpoints(), [])
         flavor, vcpu = spec.cpu.split("-")[:2]
-        entrypoint, cmd = self._start()
-        body = {"name": make_name(model, self.owner), "type": "LOAD_BALANCER", "image": spec.image, "entrypoint": entrypoint,
-                "cmd": [c.replace("/rs/boot.sh", "/rs/start.sh") for c in cmd], "ports": list(PORTS), "disk": AGENT_DISK_GB,
-                "env": env, "cpu": [{"id": flavor, "vcpuCount": int(vcpu)}], "workers": dict(want), "scaling": dict(SCALING),
-                "flashboot": FLASHBOOT, "timeout": TIMEOUT_MS}
+        body = self._agent_body(spec, env, want)
         size = len(json.dumps(body).encode())
         if size > MAX_REQUEST_BYTES:
             raise LauncherError(f"{model}: the endpoint request would be {size:,} bytes, over the {MAX_REQUEST_BYTES:,} that Runpod takes")
