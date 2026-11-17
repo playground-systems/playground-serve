@@ -58,6 +58,23 @@ hand targets in one tool call, a proportional controller underneath, the full hi
 observations, no caching. Their lessons are in the LIBERO card's docs: the image directions, the reach limit, rim
 grasps of bowls, and that a move's report must say where the hand stopped.
 
+## Wire
+
+A server whose features say `"agent": true` keeps state per episode. Add to each request:
+
+- `episode`: a string that is new for every episode. The server keys the episode by it, so a reconnect continues it.
+  Without it, an episode is the socket and its prompt.
+- `embodiment`: the embodiment card (a map, its JSON text, or a built-in card's name such as `libero_franka`); with every
+  request, or at least the first of each episode. The card names the request's camera, state and prompt keys and the
+  action layout the reply comes in. Without it the server looks for a built-in card whose keys the request has.
+- `max_steps` (optional): the episode's step limit, which the model is told.
+
+The reply's `actions` has the card's `chunk` rows. Its `agent` map holds the episode's calls, tokens, USD, model seconds,
+`finished` once the agent stopped, and `turns`, the transcript's new messages without images. A request can take as
+long as a model call (seconds to minutes): wait for the reply as for any other; the server answers pings meanwhile. A
+request whose images are all black is a warm-up and starts no episode. A provider failure after the retries (a rejected
+key, an outage) is the server's error frame.
+
 ## Memory, images and caching
 
 Each episode is one conversation, append-only: `image_horizon` is off by default, so no earlier message is edited.

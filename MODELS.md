@@ -162,7 +162,7 @@ the targets into the environment's actions. Any provider of that package works: 
 Mistral, DeepSeek, OpenRouter, and any OpenAI-compatible server by base URL. Each episode starts from an embodiment
 card that the client sends (the robot, its action space, its cameras and keys; built-in: `libero_franka`).
 [NOTES.md](src/playground_serve/families/llm_agent/NOTES.md) has the design, the harnesses compared, the providers'
-test status and the measurements; [docs/WIRE.md](docs/WIRE.md#llm-agents) the request and reply keys.
+test status and the measurements; its Wire section the request and reply keys.
 
 It has no `spec.py`, so it is not a registry entry and `pgs up` does not create it yet: it runs on a CPU worker without
 a volume, which the launcher does not make. Run it on any machine with the packages of its `requirements.txt`:
