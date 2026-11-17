@@ -72,7 +72,7 @@ jobs:
           cache-dependency-glob: pyproject.toml
           cache-suffix: py3.11-client
       - run: uv venv --python 3.11 .venv-py311
-      - run: uv pip install --python .venv-py311/bin/python -e . "pytest>=8.3" "$OPENPI_CLIENT"
+      - run: uv pip install --python .venv-py311/bin/python -e . 'pytest>=8.3' 'typing-extensions>=4.16.0' "$OPENPI_CLIENT"
       - run: .venv-py311/bin/python -m pytest -q -rs tests/client tests/test_connect.py tests/test_status.py
 
   agent-tests:

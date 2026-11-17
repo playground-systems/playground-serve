@@ -4,7 +4,7 @@ one sentence that it needs 3.11.
 The client suite on Python 3.11, installed independently of the development lock:
 
     uv venv --python 3.11 /tmp/pgs-py311
-    uv pip install --python /tmp/pgs-py311/bin/python -e . "pytest>=8.3" \
+    uv pip install --python /tmp/pgs-py311/bin/python -e . 'pytest>=8.3' 'typing-extensions>=4.16.0' \
         "openpi-client @ git+https://github.com/Physical-Intelligence/openpi@215abfb217dbac7d5f1273282331b9b1866c0479#subdirectory=packages/openpi-client"
     /tmp/pgs-py311/bin/python -m pytest tests/client tests/test_connect.py tests/test_status.py
 """

@@ -56,7 +56,7 @@ def test_valid_wire_arrays_and_scalars_remain_compatible(decoder):
 @pytest.mark.parametrize("url,trusted", [
     ("wss://endpoint.api.runpod.ai/ws", True), ("wss://endpoint.api.runpod.ai:443/ws", True),
     ("ws://endpoint.api.runpod.ai/ws", False), ("wss://endpoint.api.runpod.ai.example/ws", False),
-    ("wss://endpoint.api.runpod.ai@elsewhere.example/ws", False),
+    ("wss://endpoint.api.runpod.ai" + "@" + "elsewhere.example/ws", False),
     ("wss://endpoint.api.runpod.ai:8443/ws", False), ("ws://127.0.0.1:8000/ws", False),
 ])
 @pytest.mark.parametrize("source", ["argument", "env", "state"])
