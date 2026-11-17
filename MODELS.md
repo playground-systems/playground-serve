@@ -187,12 +187,12 @@ export OPENROUTER_API_KEY=...       # your OpenRouter key
 pgs up opus_5_5                      # prints the wss:// URL; `pgs down opus_5_5` when done
 ```
 
-Or on any machine with the packages of `families/llm_agent/requirements.txt`:
+Or install the `llm` extra on Python 3.11+ and run on your own machine, without a Runpod worker:
 
 ```bash
-D=src/playground_serve
-PYTHONPATH=$D/families/llm_agent:$D/families/common:$D/worker OPENROUTER_API_KEY=... \
-  PGS_AGENT_MODEL=opus_5_5 python $D/families/llm_agent/serve.py --port 8000
+pip install 'playground-serve[llm] @ git+https://github.com/playground-systems/playground-serve.git'
+export OPENROUTER_API_KEY=...
+pgs local opus_5_5  # connect to ws://127.0.0.1:8000; Ctrl-C stops the server
 ```
 
 [NOTES.md](src/playground_serve/families/llm_agent/NOTES.md) has the design, the harnesses compared, the request and
