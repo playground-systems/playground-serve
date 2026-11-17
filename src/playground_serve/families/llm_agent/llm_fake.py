@@ -31,6 +31,7 @@ class FakeProvider:
         self.turns: list[dict] = list(script.get("turns") or [])
         u = script.get("usage") or {}
         self.usage_in, self.usage_out = int(u.get("input", 1000)), int(u.get("output", 60))
+        self.cost = u.get("cost")  # OpenRouter's usage.cost per response, when the script gives one
         self.requests: list[dict] = []
         self.lock = threading.Lock()
         self.n = 0
@@ -47,6 +48,9 @@ class FakeProvider:
     def handle(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content or b"{}")
         self.requests.append(_strip(body))
+        if turn_error := (self.turns[self.n].get("error") if self.n < len(self.turns) else None):
+            self.n += 1
+            return httpx.Response(turn_error.get("status", 200), json={"error": {"code": turn_error.get("code", 502), "message": turn_error.get("message", "provider failed")}})
         turn, n = self._next()
         path = request.url.path
         if path.endswith("/messages"):
@@ -67,7 +71,8 @@ class FakeProvider:
             return httpx.Response(200, json={"id": f"chatcmpl-{n}", "object": "chat.completion", "model": body.get("model"),
                                              "choices": [{"index": 0, "message": message,
                                                           "finish_reason": "tool_calls" if "tool" in turn else "stop"}],
-                                             "usage": {"prompt_tokens": self.usage_in, "completion_tokens": self.usage_out}})
+                                             "usage": {"prompt_tokens": self.usage_in, "completion_tokens": self.usage_out,
+                                                       **({"cost": self.cost} if self.cost is not None else {})}})
         if path.endswith("/responses"):
             output = ([{"type": "function_call", "id": f"fc_{n}", "call_id": f"call_{n:04d}", "name": turn["tool"],
                         "arguments": json.dumps(turn.get("arguments", {})), "status": "completed"}] if "tool" in turn else

@@ -28,6 +28,7 @@ from typing import Any, Callable, Mapping
 import numpy as np
 
 import llm_card
+import llm_models
 import llm_pricing
 from llm_card import Card
 
@@ -81,6 +82,7 @@ DEFAULT_NOTES = ("The robot, the objects and their physics are simulated; the ca
 @dataclass(frozen=True)
 class Settings:
     model: str = "anthropic/claude-haiku-5-5"
+    provider: str = ""  # "openrouter": the model is an OpenRouter slug of llm_models.MODELS, on OpenRouter's key
     wire: str = ""  # "" = messages for anthropic/*, else chat
     base_url: str | None = None
     api_key_env: str | None = None
@@ -96,7 +98,17 @@ class Settings:
     keys: Mapping[str, str] = field(default_factory=dict, repr=False)
 
     @property
+    def openrouter(self) -> llm_models.OpenRouterModel | None:
+        return llm_models.MODELS.get(self.model) if self.provider == "openrouter" else None
+
+    @property
+    def price_key(self) -> str:
+        return f"openrouter/{self.model}" if self.provider == "openrouter" else self.model
+
+    @property
     def resolved_wire(self) -> str:
+        if self.provider == "openrouter":
+            return "chat"
         if self.wire or self.base_url:
             return self.wire or "chat"
         # Anthropic's Messages API; OpenAI's Responses API (the Codex models are served there only, and the GPT-6
@@ -109,16 +121,25 @@ class Settings:
         num = lambda k, d: (float(e[k]) if e.get(k, "").strip() not in ("", "none") else (None if e.get(k, "").strip() == "none" else d))  # noqa: E731
         key_names = set(KEY_ENVS) | ({e["PGS_AGENT_API_KEY_ENV"]} if e.get("PGS_AGENT_API_KEY_ENV") else set())
         horizon = e.get("PGS_AGENT_IMAGE_HORIZON", "").strip()
-        s = cls(model=e.get("PGS_AGENT_MODEL") or cls.model, wire=e.get("PGS_AGENT_WIRE", ""),
-                base_url=e.get("PGS_AGENT_BASE_URL") or None, api_key_env=e.get("PGS_AGENT_API_KEY_ENV") or None,
-                effort=(e.get("PGS_AGENT_EFFORT") or "medium") if e.get("PGS_AGENT_EFFORT", "") != "default" else None,
+        provider = e.get("PGS_AGENT_PROVIDER", "")
+        if provider == "openrouter":
+            if e.get("PGS_AGENT_MODEL") not in llm_models.MODELS:
+                raise ValueError(f"PGS_AGENT_MODEL must be one of the OpenRouter models: {', '.join(llm_models.MODELS)}")
+            key_names.add(llm_models.KEY_ENV)
+        elif provider:
+            raise ValueError("PGS_AGENT_PROVIDER is openrouter, or unset for a provider of the model's own prefix")
+        or_model = llm_models.MODELS.get(e.get("PGS_AGENT_MODEL", "")) if provider == "openrouter" else None
+        s = cls(model=e.get("PGS_AGENT_MODEL") or cls.model, provider=provider, wire=e.get("PGS_AGENT_WIRE", ""),
+                base_url=llm_models.BASE_URL if or_model else (e.get("PGS_AGENT_BASE_URL") or None),
+                api_key_env=llm_models.KEY_ENV if or_model else (e.get("PGS_AGENT_API_KEY_ENV") or None),
+                effort=(e.get("PGS_AGENT_EFFORT") or (or_model.effort if or_model else "medium")) if e.get("PGS_AGENT_EFFORT", "") != "default" else None,
                 max_calls=int(e.get("PGS_AGENT_MAX_CALLS") or 40),
                 max_usd_episode=num("PGS_AGENT_MAX_USD_EPISODE", 1.0), max_usd_total=num("PGS_AGENT_MAX_USD", None),
                 images=e.get("PGS_AGENT_IMAGES") or "always",
                 image_horizon=int(horizon) if horizon not in ("", "none") else None,
                 notes="\n".join(x for x in (DEFAULT_NOTES, e.get("PGS_AGENT_NOTES")) if x),
                 zoom=e.get("PGS_AGENT_ZOOM", "1") != "0", max_speed_frac=float(e.get("PGS_AGENT_MAX_SPEED_FRAC") or 0.1),
-                keys={k: e[k] for k in key_names if e.get(k)})
+                keys={k: e[k] for k in ([llm_models.KEY_ENV] if or_model else key_names) if e.get(k)})
         s.check(e)
         return s
 
@@ -126,13 +147,13 @@ class Settings:
         if self.base_url and not (self.base_url.startswith("https://") or os.environ.get("PGS_AGENT_ALLOW_HTTP") == "1"):
             raise ValueError("PGS_AGENT_BASE_URL must be https:// (PGS_AGENT_ALLOW_HTTP=1 for a local server on this machine)")
         capped = self.max_usd_episode is not None or self.max_usd_total is not None
-        if capped and llm_pricing.price(self.model, env) is None:
+        if capped and llm_pricing.price(self.price_key, env) is None:
             raise ValueError(f"{self.model} has no price here, so a USD cap cannot be kept: set PGS_AGENT_PRICE, or "
                              "PGS_AGENT_MAX_USD_EPISODE=none and PGS_AGENT_MAX_USD=none")
 
     def public(self) -> dict[str, Any]:
         """The settings without keys, for the metadata and logs."""
-        return {"model": self.model, "wire": self.resolved_wire, "base_url": self.base_url, "effort": self.effort,
+        return {"model": self.model, "provider": self.provider or self.model.split("/")[0], "wire": self.resolved_wire, "base_url": self.base_url, "effort": self.effort,
                 "max_calls": self.max_calls, "max_usd_episode": self.max_usd_episode, "max_usd_total": self.max_usd_total,
                 "images": self.images, "zoom": self.zoom, "image_horizon": self.image_horizon, "notes": bool(self.notes and self.notes != DEFAULT_NOTES)}
 
@@ -142,7 +163,12 @@ def make_policy(s: Settings, transport: Any = None):
     only the key of its own provider, and only to that provider's endpoint (or the endpoint's base URL)."""
     from inspect_robots_agent.policy import LLMAgentPolicy
 
-    meter = Meter(transport)
+    import httpx
+
+    inner = transport or httpx.HTTPTransport()
+    if s.openrouter is not None:
+        inner = llm_models.OpenRouterTransport(s.openrouter, inner)
+    meter = Meter(inner)
     policy = LLMAgentPolicy(model=s.model, base_url=s.base_url, api_key_env=s.api_key_env, wire=s.resolved_wire,
                             wire_capture=False, max_llm_calls=s.max_calls, effort=s.effort, images=s.images,
                             image_horizon=s.image_horizon, eval_notes=s.notes, max_speed_frac=s.max_speed_frac,
@@ -163,6 +189,8 @@ class Meter:
         self.lock = threading.Lock()
         self.tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
         self.calls = 0
+        self.cost: float | None = 0.0  # the providers' own reported cost (OpenRouter's usage.cost); None once one lacked it
+        self.last_error = None
 
     def handle_request(self, request):
         response = self.inner.handle_request(request)
@@ -174,7 +202,12 @@ class Meter:
                 usage = None
             if usage is not None:
                 t = llm_pricing.wire_tokens(usage)
+                reported = usage.get("cost") if isinstance(usage, dict) else None
                 with self.lock:
+                    if isinstance(reported, (int, float)) and not isinstance(reported, bool) and self.cost is not None:
+                        self.cost += float(reported)
+                    else:
+                        self.cost = None
                     self.calls += 1
                     for k in self.tokens:
                         self.tokens[k] += t[k]
@@ -397,6 +430,7 @@ class Session:
         self.tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
         self.seconds = 0.0
         self.instruction = ""
+        self.usd_source = "price table"
         self.sizes: dict[str, tuple[int, int]] = {}  # each camera's view size, from the episode's first request
         self.frames: dict[str, np.ndarray] = {}  # each camera's latest frame at the resolution it came in
         self.zoom: tuple[str, list[float]] | None = None  # a zoom the model asked for, shown with the next observation
@@ -490,8 +524,10 @@ class Session:
             chunk = self.policy.act(obs)
         except RuntimeError as e:
             self._account()
-            if str(e).startswith(WIRE_FAILURES):
-                raise AgentFailure(str(e)) from None
+            late = self._http_error()
+            if str(e).startswith(WIRE_FAILURES) or late:
+                text = late or str(e)
+                raise AgentFailure(f"{llm_models.error_class(text)}: {text}") from None
             self.finished, self.error = {"kind": "give_up", "reason": "the agent stopped: " + str(e)[:300]}, str(e)[:300]
             return self.policy.transcript_delta()
         finally:
@@ -501,6 +537,12 @@ class Session:
         if chunk.terminal is not None:
             self.finished = {"kind": chunk.terminal.kind, "reason": chunk.terminal.reason}
         return self.policy.transcript_delta()
+
+    def _http_error(self) -> str | None:
+        """An error that a provider returned with HTTP 200 (OpenRouter's body with `error` and no `choices`)."""
+        meter = getattr(self.policy, "pgs_meter", None)
+        inner = getattr(meter, "inner", None)
+        return getattr(inner, "last_error", None)
 
     def _account(self) -> None:
         p = self.policy
@@ -512,15 +554,18 @@ class Session:
             self.tokens = llm_pricing.tokens(dict(getattr(p, "_usage_totals", {}) or {}))
         else:
             self.tokens = dict(meter.tokens)
-        usd = llm_pricing.usd_of(self.settings.model, self.tokens)
+        reported = getattr(meter, "cost", None) if meter is not None else None
+        usd = reported if reported is not None and meter.calls else llm_pricing.usd_of(self.settings.price_key, self.tokens)
+        self.usd_source = "reported" if reported is not None and meter is not None and meter.calls else "price table"
         if usd is not None and usd > self.usd:
             self.ledger.add(usd - self.usd)
             self.usd = usd
 
     def report(self, turns: list | None = None) -> dict:
-        priced = llm_pricing.price(self.settings.model) is not None
+        priced = llm_pricing.price(self.settings.price_key) is not None
         out: dict[str, Any] = {"episode": self.key, "card": self.card.name, "model": self.settings.model, "calls": self.calls,
-                               "tokens": dict(self.tokens), "usd": round(self.usd, 6) if priced else None,
+                               "tokens": dict(self.tokens), "usd": round(self.usd, 6) if priced or self.usd_source == "reported" else None,
+                               "usd_source": self.usd_source,
                                "model_seconds": round(self.seconds, 2), "steps": self.steps, "zooms": self.zooms}
         if self.zoom is not None:  # a client that can render a camera larger may send it so for the next request
             h, w = self.sizes.get(self.zoom[0], (0, 0))

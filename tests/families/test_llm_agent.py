@@ -398,3 +398,41 @@ def test_zoom_and_motion_reports():
     assert "camera 'zoom'" in body and "the arm held still" in body
     assert "box must have" in body or "box must have" in json.dumps(fake.requests[2])  # the thin box was refused
     assert second["agent"]["zooms"] == 1
+
+
+# ------------------------------------------------------------------ OpenRouter
+import llm_models  # noqa: E402
+
+
+@pytest.mark.parametrize("slug", list(llm_models.MODELS))
+def test_each_openrouter_model(slug):
+    """Each of the nine through OpenRouter, on recorded responses: a tool call with images in the conversation, the
+    request as OpenRouter takes it (reasoning, output limit, routing, Claude's cache breakpoint), the reported cost."""
+    m = llm_models.MODELS[slug]
+    fake = llm_fake.FakeProvider({"turns": [TURNS[0], TURNS[2]], "usage": {"input": 5000, "output": 300, "cost": 0.0123}})
+    settings = llm_session.Settings.from_env({"PGS_AGENT_PROVIDER": "openrouter", "PGS_AGENT_MODEL": slug,
+                                              "OPENROUTER_API_KEY": "fake", "ANTHROPIC_API_KEY": "never-sent"})
+    assert settings.keys == {"OPENROUTER_API_KEY": "fake"} and settings.base_url == llm_models.BASE_URL
+    pol = serve.AgentPolicy(settings, lambda s: llm_session.make_policy(s, transport=fake.transport()))
+    sim = Libero()
+    replies = run(pol, sim, n=30)
+    body = fake.requests[0]
+    assert body["model"] == slug and body["reasoning"] == {"effort": m.effort} and "reasoning_effort" not in body
+    assert body["max_tokens"] == m.max_tokens and body["provider"]["require_parameters"] is True
+    assert ("cache_control" in body) == m.cache
+    assert {t["function"]["name"] for t in body["tools"]} >= {"move_to", "zoom", "done"}
+    assert sum(1 for msg in body["messages"] for p in (msg["content"] if isinstance(msg.get("content"), list) else [])
+               if p.get("type") == "image_url") == 2
+    last = replies[-1]["agent"]
+    assert last["finished"]["kind"] == "done" and last["usd"] == pytest.approx(0.0246) and last["usd_source"] == "reported"
+
+
+def test_openrouter_failures_are_classed():
+    for status, cls in ((402, "credit"), (403, "moderation"), (200, "provider")):
+        fake = llm_fake.FakeProvider({"turns": [{"error": {"status": status, "code": 502 if status == 200 else status, "message": "no"}}] * 4})
+        settings = llm_session.Settings.from_env({"PGS_AGENT_PROVIDER": "openrouter", "PGS_AGENT_MODEL": "google/gemini-3.8-flash", "OPENROUTER_API_KEY": "fake"})
+        pol = serve.AgentPolicy(settings, lambda s: llm_session.make_policy(s, transport=fake.transport()))
+        with pytest.raises(llm_session.AgentFailure, match=f"^{cls}:"):
+            pol.infer(Libero().request(), "c1")
+    with pytest.raises(ValueError, match="one of the OpenRouter models"):
+        llm_session.Settings.from_env({"PGS_AGENT_PROVIDER": "openrouter", "PGS_AGENT_MODEL": "openai/gpt-4o"})

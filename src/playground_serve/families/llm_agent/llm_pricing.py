@@ -38,12 +38,18 @@ DEFAULT_MODELS = tuple(PRICES)  # the models the hosted service offers on its ow
 
 
 def price(model: str, env: Mapping[str, str] | None = None) -> tuple[float, float, float, float] | None:
+    """USD per million tokens of a model: PGS_AGENT_PRICE, else PRICES, else OpenRouter's (model "openrouter/<slug>")."""
     given = (env if env is not None else os.environ).get("PGS_AGENT_PRICE", "").strip()
     if given:
         parts = [float(x) for x in given.split(",")]
         if len(parts) not in (2, 4) or any(p < 0 for p in parts):
             raise ValueError("PGS_AGENT_PRICE: write input,output[,cache_read,cache_write] in USD per million tokens")
         return (parts[0], parts[1], parts[2] if len(parts) == 4 else parts[0], parts[3] if len(parts) == 4 else parts[0])
+    if model.startswith("openrouter/"):
+        import llm_models
+
+        m = llm_models.MODELS.get(model.removeprefix("openrouter/"))
+        return m.prices if m else None
     return PRICES.get(model)
 
 
