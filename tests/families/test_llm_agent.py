@@ -138,7 +138,8 @@ def test_episode_on_the_messages_wire():
     system = first["system"][0]["text"]
     assert "Franka Panda" in system and llm_session.DEFAULT_NOTES in system  # the card's docs, the default notes
     assert "Step budget: step 0/220" in json.dumps(first["messages"])  # max_steps from the request
-    assert {t["name"] for t in first["tools"]} == {"move_to", "sleep", "done", "give_up"}
+    assert {t["name"] for t in first["tools"]} == {"move_to", "sleep", "zoom", "done", "give_up"}
+    assert "state[gripper_holding]" in json.dumps(first["messages"])
     images = [b for m in first["messages"] for b in (m["content"] if isinstance(m["content"], list) else []) if b.get("type") == "image"]
     assert len(images) == 2
     # Append-only history (image_horizon None): each request's messages begin with the request before's.
@@ -350,3 +351,24 @@ def test_a_plain_scene_card():
     absolute = {**plain, "action": {**plain["action"], "kind": "absolute", "labels": ["slider_x", "slider_y"]}}
     card = llm_card.from_env_card(absolute)
     assert card.agent["control_mode"] == "joint_pos" and card.native["state_field"] == "block_xy"
+
+
+def test_zoom_and_motion_reports():
+    turns = [{"tool": "zoom", "arguments": {"camera": "wrist", "box": [0.25, 0.4, 0.75, 0.9], "note": "check the rim"}},
+             {"tool": "zoom", "arguments": {"camera": "wrist", "box": [0.5, 0.5, 0.52, 0.9], "note": "too thin"}},
+             TURNS[0], TURNS[2]]
+    pol, fake = policy(turns=turns)
+    sim = Libero()
+    big = sim.request()
+    big["observation/wrist_image"] = np.random.default_rng(1).integers(1, 255, (448, 448, 3), dtype=np.uint8)
+    first = pol.infer(sim.request(), "c1")
+    assert np.abs(first["actions"][:, :6]).max() < 0.05 and first["agent"]["render"] == {"wrist": [448, 448]}
+    sim.play(first["actions"])
+    r = sim.request()
+    r["observation/wrist_image"] = big["observation/wrist_image"]  # the client rendered the wrist larger, as asked
+    r["motion_report"] = ["the arm held still"]
+    second = pol.infer(r, "c1")
+    body = json.dumps(fake.requests[1])
+    assert "camera 'zoom'" in body and "the arm held still" in body
+    assert "box must have" in body or "box must have" in json.dumps(fake.requests[2])  # the thin box was refused
+    assert second["agent"]["zooms"] == 1
