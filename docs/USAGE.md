@@ -180,3 +180,18 @@ cached environments must pass the Pillow version check before serving. Flex-π a
 Automatically discovered Runpod keys are sent only to `wss://<endpoint>.api.runpod.ai` on the default TLS port.
 Custom URLs, including URLs in the state file or `PLAYGROUND_SERVE_URL`, receive no implicit credential. Pass
 `api_key=` or `key_file=` explicitly when a custom service needs its own credential.
+
+
+## LLM episode ownership
+
+Workers advertising `playground_serve.episode_tokens` require a secret `episode_token` to resume a named episode
+on another connection. The first request may supply a random token (at least 32 ASCII characters); otherwise the
+worker generates one. Each reply returns it as `agent.episode_token`. Treat it as a credential and do not log it.
+The Python client generates and retains tokens for its most recent 128 episode IDs across reconnects. To resume
+from another client instance, supply the token explicitly. An episode ID alone cannot resume or replace a session.
+
+## Input validation
+
+Array dtypes must be boolean, integer, floating point, byte string or Unicode string, without object references.
+Array byte lengths must match their shapes; each array is limited to 32 MiB and 32 dimensions. These checks apply
+in the client and in both worker server implementations, including the wrapped openpi handler.
