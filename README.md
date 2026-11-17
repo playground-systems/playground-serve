@@ -127,6 +127,17 @@ pgs up opus_5_5                # start the CPU worker and print its websocket UR
 pgs down opus_5_5              # stop the worker when finished
 ```
 
+Alternatively, run the same agent on your own machine (Python 3.11+), with no Runpod account or CPU worker:
+
+```bash
+pip install 'playground-serve[llm] @ git+https://github.com/playground-systems/playground-serve.git'
+export OPENROUTER_API_KEY=...  # your OpenRouter key
+pgs local opus_5_5             # serves ws://127.0.0.1:8000; Ctrl-C to stop
+```
+
+Connect a client to `ws://127.0.0.1:8000`. The LLM still runs at its provider, and OpenRouter token charges apply.
+The local server listens only on the same machine and needs to stay running for the client to use it.
+
 An agent client supplies an episode ID and an embodiment card describing the robot, cameras and action space; the
 built-in `libero_franka` card is one option. Requests can take seconds to minutes. The worker costs 0.072 USD/hr while
 running (Runpod cpu3c, 2 vCPU, list price); OpenRouter token charges are separate. Each model has answered a tool call
