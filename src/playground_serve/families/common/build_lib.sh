@@ -5,7 +5,7 @@
 set -euo pipefail
 ROOT=/opt/pgs
 UV_VERSION=${UV_VERSION:-0.11.28}  # a family whose repo pins another uv sets UV_VERSION before sourcing this
-SERVER_DEPS=("websockets==15.0.1" "msgpack==1.1.0" "pillow")  # what pgs_server.py and server_decode.py import
+SERVER_DEPS=("websockets==15.0.1" "msgpack==1.1.0" "pillow>=13.0.0")  # what pgs_server.py and server_decode.py import
 # The uv cache sits next to /opt/pgs on the same disk, so uv hardlinks instead of copying (not in the tar).
 export UV_PYTHON_INSTALL_DIR=$ROOT/python UV_PYTHON_PREFERENCE=only-managed UV_CACHE_DIR=/opt/uvcache
 export GIT_LFS_SKIP_SMUDGE=1

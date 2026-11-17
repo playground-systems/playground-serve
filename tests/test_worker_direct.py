@@ -348,3 +348,17 @@ def test_worker_log_never_holds_the_token(worker):
         token = unpackb(ws.recv(timeout=10))["playground_serve"]["direct"]["token"]
     read()
     assert "ready" in log and not any(token in line for line in output)
+
+
+def test_worker_rejects_object_array_without_crashing(worker):
+    import msgpack
+
+    url, *_ = worker
+    with ws_connect(url, open_timeout=10) as ws:
+        ws.recv(timeout=10)
+        ws.send(msgpack.packb({"observation/state": {b"__ndarray__": True, b"dtype": "O",
+                                                    b"shape": [1], b"data": bytes(8)}}))
+        assert "unsupported wire dtype" in ws.recv(timeout=10)
+    # The same worker remains available to other clients after rejecting the payload.
+    with connect(url, keepalive=None) as client:
+        assert client.infer(example_obs())["actions"].shape == (10, 7)

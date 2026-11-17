@@ -199,7 +199,7 @@ def test_connect_by_model_name_and_act_returns_the_action_array(home, observatio
             assert isinstance(actions, np.ndarray) and actions.shape == (10, 7)
             reply = policy.infer(observations[0])
             assert set(reply) >= {"actions", "server_timing"}  # infer keeps openpi's whole reply
-            assert policy._headers == {"Authorization": f"Bearer {KEY}"}
+            assert policy._headers is None  # a custom state-file URL never inherits the Runpod key
         finally:
             policy.close()
 

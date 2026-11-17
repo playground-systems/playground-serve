@@ -687,6 +687,14 @@ class Launcher:
                                                   f"{idle_text(want['idleTimeout'])} after the last request."))
         return {"endpoint": ep, "volume": vol, "url": url}
 
+    def _agent_body(self, name, spec, env, want):
+        flavor, vcpu = spec.cpu.split("-")[:2]
+        entrypoint, cmd = self._start()
+        return {"name": name, "type": "LOAD_BALANCER", "image": spec.image, "entrypoint": entrypoint,
+                "cmd": [c.replace("/rs/boot.sh", "/rs/start.sh") for c in cmd], "ports": list(PORTS), "disk": AGENT_DISK_GB,
+                "env": env, "cpu": [{"id": flavor, "vcpuCount": int(vcpu)}], "workers": dict(want), "scaling": dict(SCALING),
+                "flashboot": FLASHBOOT, "timeout": TIMEOUT_MS}
+
     def _up_agent(self, spec, want: dict) -> dict:
         """An LLM agent (families/llm_agent): a load-balancing endpoint on a CPU worker of spec.cpu, no volume, the image
         spec.image, the family's start.sh in place of boot.sh, and the model's key (spec.secrets) from this machine."""
@@ -699,12 +707,9 @@ class Launcher:
         env = {**env, RELEASE_KEY: release_id(env)}
         release = env[RELEASE_KEY]
         ep, _, (their_eps, _) = self.reconcile(model, self.api.list_endpoints(), [])
+        self._ensure_owner()
+        body = self._agent_body(make_name(model, self.owner), spec, env, want)
         flavor, vcpu = spec.cpu.split("-")[:2]
-        entrypoint, cmd = self._start()
-        body = {"name": make_name(model, self.owner), "type": "LOAD_BALANCER", "image": spec.image, "entrypoint": entrypoint,
-                "cmd": [c.replace("/rs/boot.sh", "/rs/start.sh") for c in cmd], "ports": list(PORTS), "disk": AGENT_DISK_GB,
-                "env": env, "cpu": [{"id": flavor, "vcpuCount": int(vcpu)}], "workers": dict(want), "scaling": dict(SCALING),
-                "flashboot": FLASHBOOT, "timeout": TIMEOUT_MS}
         size = len(json.dumps(body).encode())
         if size > MAX_REQUEST_BYTES:
             raise LauncherError(f"{model}: the endpoint request would be {size:,} bytes, over the {MAX_REQUEST_BYTES:,} that Runpod takes")
@@ -816,6 +821,8 @@ class Launcher:
         """Bytes of the largest request `up` may send for this env: an endpoint create (an update sends a part of it),
         with its variable parts at their longest: the longest data center id, every GPU type of the model's pools that
         it may exclude, a long volume id."""
+        if getattr(spec, "cpu", ""):
+            return len(encode(self._agent_body(make_name(model, self.owner or new_owner()), spec, env, want)))
         excluded = sorted({i for p in spec.gpu_pools for i in pool_types(gpus, p, spec.min_container_ram_gb)[1]})
         gpu = {"pools": [max(spec.gpu_pools, key=len)], "count": 1, "minCudaVersion": spec_cuda(spec) or "",
                "excludedTypes": excluded}

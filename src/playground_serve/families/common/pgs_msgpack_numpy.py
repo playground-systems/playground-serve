@@ -23,11 +23,31 @@ def pack_array(obj):
 
 
 def unpack_array(obj):
+    if b"__ndarray__" not in obj and b"__npgeneric__" not in obj:
+        return obj
+    dtype = np.dtype(obj[b"dtype"])
+    # Object arrays interpret the wire bytes as Python pointers. Reject them on input,
+    # including structured/subarray dtypes containing objects, before constructing anything.
+    if dtype.hasobject or dtype.kind not in "biufSU" or not 0 < dtype.itemsize <= 32 * 1024 * 1024:
+        raise ValueError("unsupported wire dtype")
+    data = obj[b"data"]
     if b"__ndarray__" in obj:
-        return np.ndarray(buffer=obj[b"data"], dtype=np.dtype(obj[b"dtype"]), shape=obj[b"shape"])
-    if b"__npgeneric__" in obj:
-        return np.dtype(obj[b"dtype"]).type(obj[b"data"])
-    return obj
+        shape = obj[b"shape"]
+        if not isinstance(shape, (list, tuple)) or len(shape) > 32:
+            raise ValueError("invalid wire shape")
+        count = 1
+        for dim in shape:
+            if type(dim) is not int or dim < 0 or dim > 32 * 1024 * 1024:
+                raise ValueError("invalid wire dimension")
+            count *= dim
+            if count * dtype.itemsize > 32 * 1024 * 1024:
+                raise ValueError("wire array too large")
+        if not isinstance(data, bytes) or len(data) != count * dtype.itemsize:
+            raise ValueError("wire array byte length does not match shape")
+        return np.ndarray(buffer=data, dtype=dtype, shape=shape)
+    if not isinstance(data, (bool, int, float, str, bytes)):
+        raise ValueError("invalid wire scalar")
+    return dtype.type(data)
 
 
 def packb(obj) -> bytes:
@@ -36,3 +56,10 @@ def packb(obj) -> bytes:
 
 def unpackb(data: bytes):
     return msgpack.unpackb(data, object_hook=unpack_array)
+
+
+class Packer:
+    """The interface used by openpi's server, with the same safe wire codec."""
+
+    def pack(self, obj):
+        return packb(obj)

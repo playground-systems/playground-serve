@@ -19,7 +19,7 @@ env:
 
 jobs:
   pytest:
-    # The full suite on each Python that `pgs` supports (3.10 and later, _pgs.py). Tests that need openpi, torch or
+    # The full suite on each Python that `pgs` supports (3.11 and later, _pgs.py). Tests that need openpi, torch or
     # LeRobot skip, as on a laptop: the development environment does not install them (CONTRIBUTING.md). On 3.13
     # and later the dev group builds numpy 1.26 and dm-tree 0.1.8 from source (openpi-client pins numpy below 2);
     # the uv cache keeps the built wheels for later runs.
@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python: ["3.11", "3.12", "3.13", "3.14"]
     env:
       # dm-tree 0.1.8 bundles an abseil whose headers use uint8_t without <cstdint>, an error under GCC 13.
       CXXFLAGS: -include cstdint
@@ -56,10 +56,9 @@ jobs:
       - run: uv sync --locked
       - run: uv run --locked pytest -q -rs
 
-  client-py38:
-    # The client (`from playground_serve import connect`) supports Python 3.8; the uv lock covers 3.10 and later, so
-    # this job builds its own environment, as tests/client/test_import.py describes.
-    name: client (Python 3.8)
+  client-py311:
+    # Exercise installation from package metadata independently of the development lock.
+    name: client (Python 3.11)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -71,10 +70,25 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: pyproject.toml
-          cache-suffix: py3.8-client
-      - run: uv venv --python 3.8 .venv-py38
-      - run: uv pip install --python .venv-py38/bin/python -e . "pytest>=8.3" "$OPENPI_CLIENT"
-      - run: .venv-py38/bin/python -m pytest -q -rs tests/client tests/test_connect.py tests/test_status.py
+          cache-suffix: py3.11-client
+      - run: uv venv --python 3.11 .venv-py311
+      - run: uv pip install --python .venv-py311/bin/python -e . "pytest>=8.3" "$OPENPI_CLIENT"
+      - run: .venv-py311/bin/python -m pytest -q -rs tests/client tests/test_connect.py tests/test_status.py
+
+  agent-tests:
+    name: LLM agent protocol
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.11"
+          enable-cache: true
+      - run: uv run --locked --with inspect-robots==1.0.0 --with inspect-robots-agent==0.30.0 --with httpx==0.28.1 pytest -q tests/families/test_llm_agent.py tests/test_security.py
 
   release-check:
     name: release check

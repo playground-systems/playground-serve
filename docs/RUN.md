@@ -29,7 +29,7 @@ pip install "playground-serve[so101] @ git+https://github.com/playground-systems
 
 The `so101` extra installs LeRobot 0.7.0 with its Feetech motor support (the version `pgs run` was written against;
 it also installs PyTorch, which LeRobot imports). Without LeRobot, `pgs run so101` says how to install it. The
-simulator needs only MuJoCo: `pip install "playground-serve[sim] @ git+..."` on Python 3.10 or later.
+simulator needs only MuJoCo: `pip install "playground-serve[sim] @ git+..."` on Python 3.11 or later.
 
 ## Setup of a real SO-101
 

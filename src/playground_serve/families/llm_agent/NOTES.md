@@ -63,7 +63,7 @@ grasps of bowls, and that a move's report must say where the hand stopped.
 
 A server whose features say `"agent": true` keeps state per episode. Add to each request:
 
-- `episode`: a string that is new for every episode. The server keys the episode by it, so a reconnect continues it.
+- `episode`: a string that is new for every episode. A reconnect also needs its secret `episode_token`, returned in `agent.episode_token`.
   Without it, an episode is the socket and its prompt.
 - `embodiment`: the embodiment card (a map, its JSON text, or a built-in card's name such as `libero_franka`); with every
   request, or at least the first of each episode. The card names the request's camera, state and prompt keys and the

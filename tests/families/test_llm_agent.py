@@ -153,8 +153,10 @@ def test_an_episode_through_openrouter():
 def test_episodes_by_id_and_by_connection():
     pol, fake = policy(turns=[TURNS[0]] * 10)
     a, b = Libero("a"), Libero("b")
-    pol.infer(a.request(), "c1")
-    pol.infer(a.request(), "c2")  # a reconnect continues episode a
+    first = pol.infer(a.request(), "c1")
+    with pytest.raises(PermissionError):
+        pol.infer(a.request(), "c2")
+    pol.infer({**a.request(), "episode_token": first["agent"]["episode_token"]}, "c2")
     pol.infer(b.request(), "c1")
     assert set(pol.sessions) == {"e:a", "e:b"} and len(fake.requests) == 2
     anon = Libero(episode=None)
@@ -411,3 +413,30 @@ def test_openrouter_failures_are_classed():
             pol.infer(Libero().request(), "c1")
     with pytest.raises(ValueError, match="one of the agent models"):
         llm_session.Settings.from_env({"PGS_AGENT_MODEL": "openai/gpt-4o"})
+
+
+def test_python_client_resumes_with_capability_after_reconnect():
+    from playground_serve.client import connect
+    from playground_serve.client.client import ServerError
+
+    pol, _ = policy(turns=[TURNS[0]] * 10)
+    server = serve.AgentServer(pol, host="127.0.0.1", port=0).start()
+    url = f"ws://127.0.0.1:{server.port}/ws"
+    try:
+        request = Libero("resume-test").request()
+        with connect(url, keepalive=None) as client:
+            first = client.infer(request)
+            token = first["agent"]["episode_token"]
+            assert "episode_token" not in request  # the caller's observation isn't mutated
+            client._close_ws()
+            second = client.infer(request)
+            assert second["agent"]["episode_token"] == token
+            assert second["agent"]["steps"] > first["agent"]["steps"]
+        with connect(url, keepalive=None) as stranger:
+            with pytest.raises(ServerError, match="episode resume requires"):
+                stranger.infer(request)
+        with connect(url, keepalive=None) as resumed:
+            third = resumed.infer({**request, "episode_token": token})
+            assert third["agent"]["steps"] > second["agent"]["steps"]
+    finally:
+        server.stop()

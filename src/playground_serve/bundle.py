@@ -63,7 +63,8 @@ def worker_files(family: str = "openpi", verify: bool = False, entry: str | None
     family's Python files are slim."""
     root = resources.files("playground_serve")
     if family == "openpi":
-        return {name: root.joinpath("worker", *name.split("/")).read_bytes() for name in WORKER_FILES}
+        return {**{name: root.joinpath("worker", *name.split("/")).read_bytes() for name in WORKER_FILES},
+                "pgs_msgpack_numpy.py": root.joinpath("families", "common", "pgs_msgpack_numpy.py").read_bytes()}
     folder = root.joinpath("families", family)
     if family == "common" or not folder.joinpath("serve.py").is_file():
         raise ValueError(f"no worker family {family!r} in playground_serve/families")
@@ -156,7 +157,7 @@ def endpoint_env(spec: ModelSpec, release: str) -> dict[str, str]:
         # On the network volume: the environment tar is shared by all models. Checkpoints land per model under
         # OPENPI_DATA_HOME (openpi caches gs://bucket/path at OPENPI_DATA_HOME/bucket/path). The worker sets
         # JAX_COMPILATION_CACHE_DIR to RS_JAX_CACHE_ROOT/<RS_MODEL>/<GPU name>.
-        "RS_ENV_TAR": f"{VOLUME}/rs/env.tar",
+        "RS_ENV_TAR": f"{VOLUME}/rs/env-secure-v2.tar",
         "OPENPI_DATA_HOME": f"{VOLUME}/openpi_data",
         "RS_JAX_CACHE_ROOT": f"{VOLUME}/jax_cache",
         "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": "0",
@@ -179,7 +180,7 @@ def family_env(spec: ModelSpec, release: str) -> dict[str, str]:
         "RS_FAST": "auto",  # the family's fast path where it has one and it passes its check; "off" = stock
         "PORT": str(PORT),
         "PORT_HEALTH": str(PORT_HEALTH),
-        "RS_ENV_TAR": f"{VOLUME}/pgs/{spec.family}/env.tar",
+        "RS_ENV_TAR": f"{VOLUME}/pgs/{spec.family}/env-secure-v2.tar",
         "RS_WEIGHTS": f"{VOLUME}/pgs/weights",
         "HF_HOME": f"{VOLUME}/hf",
         "HF_HUB_ENABLE_HF_TRANSFER": "0",

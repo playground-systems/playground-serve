@@ -79,4 +79,4 @@ class ProposedSpec:
         these keys and values, plus RS_FILES, RS_RELEASE, RS_FAMILY, RS_WEIGHTS and RS_FAST; `pgs up` adds the
         secrets)."""
         return {"RS_MODEL": self.name, "RS_CHECKPOINT": self.checkpoint, "PORT": "8000", "PORT_HEALTH": "8001",
-                "RS_ENV_TAR": f"{VOLUME}/pgs/{self.family}/env.tar", "HF_HOME": f"{VOLUME}/hf", **self.env}
+                "RS_ENV_TAR": f"{VOLUME}/pgs/{self.family}/env-secure-v2.tar", "HF_HOME": f"{VOLUME}/hf", **self.env}

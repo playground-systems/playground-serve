@@ -254,7 +254,10 @@ if FAST:
 sys.path.insert(0, "scripts")
 import serve_policy  # noqa: E402  (openpi/scripts/serve_policy.py)
 from openpi.serving import websocket_policy_server  # noqa: E402
-from openpi_client import msgpack_numpy  # noqa: E402
+import pgs_msgpack_numpy as msgpack_numpy  # noqa: E402
+
+# The upstream handler must decode through our validated codec too.
+websocket_policy_server.msgpack_numpy = msgpack_numpy
 
 log("imports_done", jax=jax.__version__, modules=len(sys.modules),
     packages=sorted({n.split(".")[0] for n, m in list(sys.modules.items()) if "site-packages" in (getattr(m, "__file__", "") or "")}))

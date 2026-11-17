@@ -126,6 +126,7 @@ class Policy:
         self._path: dict = {}  # how to open a socket on the path that carries requests (for the second socket)
         self._sid, self._seq = "", 0
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
+        self._episode_tokens: dict[str, str] = {}
         self._ws: ClientConnection | None = None
         self._io = threading.RLock()  # held for each request/reply pair: one request in flight on the socket
         self._last_send = time.monotonic()
@@ -276,6 +277,17 @@ class Policy:
         return packb(enc), None
 
     def infer(self, obs: dict) -> dict:
+        if self.features.get("episode_tokens") and obs.get("episode") not in (None, ""):
+            episode = obs["episode"]
+            if not isinstance(episode, str):
+                raise ValueError("episode must be a string")
+            with self._io:
+                token = obs.get("episode_token") or self._episode_tokens.get(episode) or secrets.token_urlsafe(32)
+                self._episode_tokens[episode] = token
+                # Bound local bookkeeping. An explicit token can resume an evicted episode.
+                if len(self._episode_tokens) > 128:
+                    del self._episode_tokens[next(iter(self._episode_tokens))]
+            obs = {**obs, "episode_token": token}
         self._last_send = time.monotonic()  # before the lock: a keep-alive due now sees the activity and skips
         t0 = time.perf_counter()
         made = self.connects, self._aux
