@@ -1,7 +1,7 @@
 [project]
 name = "playground-serve"
 version = "0.1.0"
-description = "One command to serve an openpi robot policy (pi0.5) on a Runpod serverless GPU, and its robot client"
+description = "Open source serving for robot policies and LLM agents on Runpod"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]

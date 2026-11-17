@@ -14,17 +14,17 @@ the known limits. The [README](../README.md) has the quick start; [MODELS.md](..
 ## Install
 
 ```bash
-pip install git+https://github.com/playground-systems/playground-serve      # pip
-uv tool install --python 3.12 git+https://github.com/playground-systems/playground-serve   # or as a uv tool
+pip install playground-serve      # pip
+uv tool install --python 3.12 playground-serve   # or as a uv tool
 ```
 
 Both install the commands `pgs` and `playground-serve` (the same program).
 
-No install: put `uvx --python 3.12 --from git+https://github.com/playground-systems/playground-serve` in front of
+No install: put `uvx --python 3.12 --from playground-serve` in front of
 each command, for example:
 
 ```bash
-uvx --python 3.12 --from git+https://github.com/playground-systems/playground-serve pgs up pi05_libero
+uvx --python 3.12 --from playground-serve pgs up pi05_libero
 ```
 
 ## Use it from Python
