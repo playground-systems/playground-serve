@@ -30,6 +30,7 @@ dependencies = [
 so101 = ["lerobot[feetech]==0.7.0; python_version >= '3.12'"]
 # `pgs run so101 --sim`: the simulated arm.
 sim = ["mujoco>=3.2"]
+llm = ["inspect-robots==1.0.0; python_version >= '3.11'", "inspect-robots-agent==0.30.0; python_version >= '3.11'", "httpx==0.28.1; python_version >= '3.11'"]
 
 [project.urls]
 Homepage = "https://github.com/playground-systems/playground-serve"
