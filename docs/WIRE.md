@@ -117,4 +117,3 @@ and starts no worker. `running` >= 1 is warm (counted from container start, so i
 | `COLD_WAIT_S` | `40, 120` | `resolve.COLD_WAIT_S` |
 | `WARM_WAIT_S` | `0, 1` | `resolve.WARM_WAIT_S` |
 | `URL_ENV` | `PLAYGROUND_SERVE_URL` | `resolve.URL_ENV` |
-
