@@ -1,0 +1,71 @@
+[project]
+name = "playground-serve"
+version = "0.1.1"
+description = "Open source serving for robot policies and LLM agents on Runpod"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Playground Serve contributors" }]
+keywords = ["robotics", "openpi", "pi0.5", "vla", "runpod", "serverless", "gpu", "inference"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# Pillow 13 security fixes require Python 3.11 or later.
+requires-python = ">=3.11"
+dependencies = [
+    "msgpack>=1.0.5",
+    "numpy>=1.22.4",
+    "pillow>=13.0.0",
+    "websockets>=14.0",
+]
+
+[project.optional-dependencies]
+# `pgs run so101`: LeRobot's SO-101 follower driver, calibration and OpenCV cameras (LeRobot 0.5 and later need Python
+# 3.12). Pinned: run/so101.py's units and calls were read from this version.
+so101 = ["lerobot[feetech]==0.7.0; python_version >= '3.12'"]
+# `pgs run so101 --sim`: the simulated arm.
+sim = ["mujoco>=3.2"]
+llm = ["inspect-robots==1.0.0; python_version >= '3.11'", "inspect-robots-agent==0.30.0; python_version >= '3.11'", "httpx==0.28.1; python_version >= '3.11'"]
+
+[project.urls]
+Homepage = "https://github.com/playground-systems/playground-serve"
+Issues = "https://github.com/playground-systems/playground-serve/issues"
+
+[project.scripts]
+pgs = "playground_serve._pgs:main"
+playground-serve = "playground_serve._pgs:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    # The real openpi client, for the client's wire-compatibility tests. It pins numpy below 2.
+    "openpi-client @ git+https://github.com/Physical-Intelligence/openpi@215abfb217dbac7d5f1273282331b9b1866c0479#subdirectory=packages/openpi-client",
+    "typing-extensions>=4.16.0",  # openpi-client imports it without declaring it
+    "mujoco>=3.2",  # tests/run/test_sim.py
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/playground_serve"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "docs", "scripts", "README.md", "MODELS.md", "LICENSE", "NOTICE", "uv.lock"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.uv]
+# LeRobot needs numpy 2, the dev group's openpi-client numpy below 2 (docs/RUN.md, Development, tests both).
+conflicts = [[{ extra = "so101" }, { group = "dev" }]]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["ignore:connect\\(\\) must be used as a context manager:DeprecationWarning:openpi_client"]

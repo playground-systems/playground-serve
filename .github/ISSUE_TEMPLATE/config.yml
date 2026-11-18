@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://github.com/playground-systems/playground-serve/blob/main/docs/USAGE.md
+    about: Install, the API key, every command and option, costs and how it works.
+  - name: Report a security vulnerability
+    url: https://github.com/playground-systems/playground-serve/blob/main/SECURITY.md
+    about: Privately, as SECURITY.md describes, not in a public issue.

@@ -1,0 +1,137 @@
+{
+ "version": 1,
+ "environment": {
+  "id": "env_example",
+  "revision": 1,
+  "hash": "000000000000",
+  "name": "example"
+ },
+ "task": {
+  "number": 1,
+  "instruction": "put the red block in the bowl",
+  "seed": 1000,
+  "episode": 0
+ },
+ "robot": {
+  "name": "panda",
+  "arms": 1,
+  "arm": "Franka Panda, 7 joints",
+  "gripper": "Franka hand, parallel, 80 mm",
+  "note": "the default; its action and observation spaces match LIBERO's"
+ },
+ "frame": "world: metres, z up, the table top at z = 0.75; x away from the robot base, y to its left; quaternions x y z w",
+ "controlHz": 20,
+ "action": {
+  "layout": "eef_abs_pose_rot6d",
+  "size": 10,
+  "labels": [
+   "x",
+   "y",
+   "z",
+   "r00",
+   "r10",
+   "r20",
+   "r01",
+   "r11",
+   "r21",
+   "gripper"
+  ],
+  "low": [
+   0.15,
+   -0.55,
+   0.755,
+   -1,
+   -1,
+   -1,
+   -1,
+   -1,
+   -1,
+   0
+  ],
+  "high": [
+   1.05,
+   0.55,
+   1.45,
+   1,
+   1,
+   1,
+   1,
+   1,
+   1,
+   1
+  ],
+  "maxStep": [
+   0.025,
+   0.025,
+   0.025,
+   0.1,
+   0.1,
+   0.1,
+   0.1,
+   0.1,
+   0.1,
+   0.25
+  ],
+  "chunk": "an answer is {actions: (T, 10)}: the hand's absolute pose (position and the first two columns of its rotation) and the gripper (0 open, 1 closed); the rows run in order, one per control step, then the next observation is sent"
+ },
+ "observation": {
+  "cameras": [
+   {
+    "name": "agentview",
+    "width": 256,
+    "height": 256,
+    "about": "the scene's reference camera, square, with its horizontal field"
+   },
+   {
+    "name": "wrist",
+    "width": 256,
+    "height": 256,
+    "about": "on the hand, behind the fingers, looking along them"
+   }
+  ],
+  "state": [
+   {
+    "name": "eef_state",
+    "size": 10,
+    "labels": [
+     "x",
+     "y",
+     "z",
+     "r00",
+     "r10",
+     "r20",
+     "r01",
+     "r11",
+     "r21",
+     "gripper_command"
+    ]
+   },
+   {
+    "name": "gripper_qpos",
+    "size": 2,
+    "labels": [
+     "finger_left_m",
+     "finger_right_m"
+    ]
+   }
+  ],
+  "prompt": "the task's instruction"
+ },
+ "limits": {
+  "maxSteps": 1100,
+  "seconds": 60
+ },
+ "success": [
+  "Nothing moves before the robot starts.",
+  "Nothing overlaps at the start.",
+  "Both finger sides push on the target with at least 0.5 N for 0.2 s.",
+  "Held by the fingers alone, the target rises at least 20 mm.",
+  "The hand lets go and does not touch the target again.",
+  "The target ends within 20 mm of its destination, resting only on its support.",
+  "After release, the target stays upright and still for 2 s.",
+  "No other loose object moves more than 5 mm or turns more than 5 degrees.",
+  "No object jumps further than its velocity allows.",
+  "The target moves without contact only when it falls.",
+  "The routine runs to its end without an error."
+ ]
+}

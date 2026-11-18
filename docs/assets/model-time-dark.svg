@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="580" viewBox="0 0 880 580" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+<title id="t">Model time per call, stock against the Playground Serve fast path, per model family</title>
+<desc id="d">MolmoAct2 on DROID, RTX 4090: stock 532.0 ms, fast 104.8 ms; Xiaomi-Robotics-1 on RoboCasa365, RTX 4090: stock 267.9 ms, fast 65.5 ms; ABC-VLA on YAM (ABC sim), RTX 4090: stock 84.0 ms, fast 28.8 ms; Flex-π on LIBERO, A40: stock 318.5 ms, fast 131.9 ms; π0.5 (openpi) on LIBERO, RTX 4090: stock 75–79 ms, fast 31–34 ms; GR00T N1.7 on LIBERO, RTX 4090: stock 118.4 ms, fast 68.5 ms; Cosmos 3 Edge on DROID, RTX 5090: stock 514.0 ms, fast 439.5 ms</desc>
+<rect x="0.5" y="0.5" width="879" height="579" rx="12" fill="#0d1117" stroke="#3d444d"/>
+<text x="28" y="42" font-size="18" font-weight="600" fill="#f0f6fc">Time per model call: stock against the fast path</text>
+<text x="28" y="66" font-size="13" fill="#9198a1">Server infer_ms, median, on each model's default GPU. Same weights, precision, steps and inputs;</text>
+<text x="28" y="84" font-size="13" fill="#9198a1">the fast path must reproduce the stock actions at every start, or the worker serves stock.</text>
+<rect x="28" y="103" width="12" height="12" rx="3" fill="#656c76"/>
+<text x="46" y="113.5" font-size="12.5" fill="#9198a1">stock: the model&#x27;s own inference code</text>
+<rect x="327.0" y="103" width="12" height="12" rx="3" fill="#3987e5"/>
+<text x="345.0" y="113.5" font-size="12.5" fill="#9198a1">Playground Serve fast path</text>
+<text x="852" y="113.5" font-size="12.5" text-anchor="end" fill="#9198a1">faster</text>
+<line x1="236.0" y1="122" x2="236.0" y2="492" stroke="#3d444d" stroke-width="1"/>
+<text x="236.0" y="510" font-size="11.5" text-anchor="middle" fill="#7d8590">0</text>
+<line x1="323.3" y1="122" x2="323.3" y2="492" stroke="#21262d" stroke-width="1"/>
+<text x="323.3" y="510" font-size="11.5" text-anchor="middle" fill="#7d8590">100</text>
+<line x1="410.7" y1="122" x2="410.7" y2="492" stroke="#21262d" stroke-width="1"/>
+<text x="410.7" y="510" font-size="11.5" text-anchor="middle" fill="#7d8590">200</text>
+<line x1="498.0" y1="122" x2="498.0" y2="492" stroke="#21262d" stroke-width="1"/>
+<text x="498.0" y="510" font-size="11.5" text-anchor="middle" fill="#7d8590">300</text>
+<line x1="585.3" y1="122" x2="585.3" y2="492" stroke="#21262d" stroke-width="1"/>
+<text x="585.3" y="510" font-size="11.5" text-anchor="middle" fill="#7d8590">400</text>
+<line x1="672.7" y1="122" x2="672.7" y2="492" stroke="#21262d" stroke-width="1"/>
+<text x="672.7" y="510" font-size="11.5" text-anchor="middle" fill="#7d8590">500</text>
+<line x1="760.0" y1="122" x2="760.0" y2="492" stroke="#21262d" stroke-width="1"/>
+<text x="760.0" y="510" font-size="11.5" text-anchor="middle" fill="#7d8590">600 ms</text>
+<text x="28" y="147" font-size="14" font-weight="600" fill="#f0f6fc">MolmoAct2</text>
+<text x="28" y="165" font-size="12" fill="#9198a1">DROID · RTX 4090</text>
+<path d="M236.0,134.0 H696.6 A4.0,4.0 0 0 1 700.6,138.0 V143.0 A4.0,4.0 0 0 1 696.6,147.0 H236.0 Z" fill="#656c76"/>
+<text x="706.6" y="145" font-size="12" fill="#9198a1" font-weight="400">532.0</text>
+<path d="M236.0,150.0 H323.5 A4.0,4.0 0 0 1 327.5,154.0 V159.0 A4.0,4.0 0 0 1 323.5,163.0 H236.0 Z" fill="#3987e5"/>
+<text x="333.5" y="161" font-size="12" fill="#f0f6fc" font-weight="600">104.8</text>
+<text x="852" y="155" font-size="16" font-weight="600" text-anchor="end" fill="#f0f6fc">5.1x</text>
+<text x="28" y="199" font-size="14" font-weight="600" fill="#f0f6fc">Xiaomi-Robotics-1</text>
+<text x="28" y="217" font-size="12" fill="#9198a1">RoboCasa365 · RTX 4090</text>
+<path d="M236.0,186.0 H466.0 A4.0,4.0 0 0 1 470.0,190.0 V195.0 A4.0,4.0 0 0 1 466.0,199.0 H236.0 Z" fill="#656c76"/>
+<text x="476.0" y="197" font-size="12" fill="#9198a1" font-weight="400">267.9</text>
+<path d="M236.0,202.0 H289.2 A4.0,4.0 0 0 1 293.2,206.0 V211.0 A4.0,4.0 0 0 1 289.2,215.0 H236.0 Z" fill="#3987e5"/>
+<text x="299.2" y="213" font-size="12" fill="#f0f6fc" font-weight="600">65.5</text>
+<text x="852" y="207" font-size="16" font-weight="600" text-anchor="end" fill="#f0f6fc">4.1x</text>
+<text x="28" y="251" font-size="14" font-weight="600" fill="#f0f6fc">ABC-VLA</text>
+<text x="28" y="269" font-size="12" fill="#9198a1">YAM (ABC sim) · RTX 4090</text>
+<path d="M236.0,238.0 H305.4 A4.0,4.0 0 0 1 309.4,242.0 V247.0 A4.0,4.0 0 0 1 305.4,251.0 H236.0 Z" fill="#656c76"/>
+<text x="315.4" y="249" font-size="12" fill="#9198a1" font-weight="400">84.0</text>
+<path d="M236.0,254.0 H257.2 A4.0,4.0 0 0 1 261.2,258.0 V263.0 A4.0,4.0 0 0 1 257.2,267.0 H236.0 Z" fill="#3987e5"/>
+<text x="267.2" y="265" font-size="12" fill="#f0f6fc" font-weight="600">28.8</text>
+<text x="852" y="259" font-size="16" font-weight="600" text-anchor="end" fill="#f0f6fc">2.9x</text>
+<text x="28" y="303" font-size="14" font-weight="600" fill="#f0f6fc">Flex-π</text>
+<text x="28" y="321" font-size="12" fill="#9198a1">LIBERO · A40</text>
+<path d="M236.0,290.0 H510.2 A4.0,4.0 0 0 1 514.2,294.0 V299.0 A4.0,4.0 0 0 1 510.2,303.0 H236.0 Z" fill="#656c76"/>
+<text x="520.2" y="301" font-size="12" fill="#9198a1" font-weight="400">318.5</text>
+<path d="M236.0,306.0 H347.2 A4.0,4.0 0 0 1 351.2,310.0 V315.0 A4.0,4.0 0 0 1 347.2,319.0 H236.0 Z" fill="#3987e5"/>
+<text x="357.2" y="317" font-size="12" fill="#f0f6fc" font-weight="600">131.9</text>
+<text x="852" y="311" font-size="16" font-weight="600" text-anchor="end" fill="#f0f6fc">2.4x</text>
+<text x="28" y="355" font-size="14" font-weight="600" fill="#f0f6fc">π0.5 (openpi)</text>
+<text x="28" y="373" font-size="12" fill="#9198a1">LIBERO · RTX 4090</text>
+<path d="M236.0,342.0 H297.5 A4.0,4.0 0 0 1 301.5,346.0 V351.0 A4.0,4.0 0 0 1 297.5,355.0 H236.0 Z" fill="#656c76"/>
+<path d="M297.5,342.0 H301.2 A3.7466666666666697,3.7466666666666697 0 0 1 305.0,345.7 V351.3 A3.7466666666666697,3.7466666666666697 0 0 1 301.2,355.0 H297.5 Z" fill="#656c76" fill-opacity="0.4"/>
+<text x="311.0" y="353" font-size="12" fill="#9198a1" font-weight="400">75–79</text>
+<path d="M236.0,358.0 H259.1 A4.0,4.0 0 0 1 263.1,362.0 V367.0 A4.0,4.0 0 0 1 259.1,371.0 H236.0 Z" fill="#3987e5"/>
+<path d="M259.1,358.0 H262.4 A3.3100000000000023,3.3100000000000023 0 0 1 265.7,361.3 V367.7 A3.3100000000000023,3.3100000000000023 0 0 1 262.4,371.0 H259.1 Z" fill="#3987e5" fill-opacity="0.4"/>
+<text x="271.7" y="369" font-size="12" fill="#f0f6fc" font-weight="600">31–34</text>
+<text x="852" y="363" font-size="16" font-weight="600" text-anchor="end" fill="#f0f6fc">2.2–2.5x</text>
+<text x="28" y="407" font-size="14" font-weight="600" fill="#f0f6fc">GR00T N1.7</text>
+<text x="28" y="425" font-size="12" fill="#9198a1">LIBERO · RTX 4090</text>
+<path d="M236.0,394.0 H335.4 A4.0,4.0 0 0 1 339.4,398.0 V403.0 A4.0,4.0 0 0 1 335.4,407.0 H236.0 Z" fill="#656c76"/>
+<text x="345.4" y="405" font-size="12" fill="#9198a1" font-weight="400">118.4</text>
+<path d="M236.0,410.0 H291.8 A4.0,4.0 0 0 1 295.8,414.0 V419.0 A4.0,4.0 0 0 1 291.8,423.0 H236.0 Z" fill="#3987e5"/>
+<text x="301.8" y="421" font-size="12" fill="#f0f6fc" font-weight="600">68.5</text>
+<text x="852" y="415" font-size="16" font-weight="600" text-anchor="end" fill="#f0f6fc">1.7x</text>
+<text x="28" y="459" font-size="14" font-weight="600" fill="#f0f6fc">Cosmos 3 Edge</text>
+<text x="28" y="477" font-size="12" fill="#9198a1">DROID · RTX 5090 · experimental</text>
+<path d="M236.0,446.0 H680.9 A4.0,4.0 0 0 1 684.9,450.0 V455.0 A4.0,4.0 0 0 1 680.9,459.0 H236.0 Z" fill="#656c76"/>
+<text x="690.9" y="457" font-size="12" fill="#9198a1" font-weight="400">514.0</text>
+<path d="M236.0,462.0 H615.8 A4.0,4.0 0 0 1 619.8,466.0 V471.0 A4.0,4.0 0 0 1 615.8,475.0 H236.0 Z" fill="#3987e5"/>
+<text x="625.8" y="473" font-size="12" fill="#f0f6fc" font-weight="600">439.5</text>
+<text x="852" y="467" font-size="16" font-weight="600" text-anchor="end" fill="#f0f6fc">1.2x</text>
+<text x="28" y="542" font-size="11.5" fill="#7d8590">Every number from MODELS.md, measured on Runpod Serverless from 2026-11-13 to 2026-11-16.</text>
+<text x="28" y="560" font-size="11.5" fill="#7d8590">Not shown: FLUX 3 Action (experimental), which serves its stock path only, about 3.2 s per call.</text>
+</svg>

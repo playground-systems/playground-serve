@@ -1,0 +1,140 @@
+{
+ "version": 1,
+ "environment": {
+  "id": "env_example",
+  "revision": 1,
+  "hash": "000000000000",
+  "name": "example"
+ },
+ "task": {
+  "number": 1,
+  "instruction": "put the red block in the bowl",
+  "seed": 1000,
+  "episode": 0
+ },
+ "robot": {
+  "name": "yam_bimanual",
+  "arms": 2,
+  "arm": "I2RT YAM, two arms, 6 joints",
+  "gripper": "YAM linear gripper on each arm, parallel, 95 mm",
+  "note": "two arms; its action and observation spaces follow ALOHA's (14 joint positions, three cameras)"
+ },
+ "frame": "world: metres, z up, the table top at z = 0.75; x away from the robot base, y to its left; quaternions x y z w",
+ "controlHz": 50,
+ "action": {
+  "layout": "aloha_joints",
+  "size": 14,
+  "labels": [
+   "left_joint1",
+   "left_joint2",
+   "left_joint3",
+   "left_joint4",
+   "left_joint5",
+   "left_joint6",
+   "left_gripper",
+   "right_joint1",
+   "right_joint2",
+   "right_joint3",
+   "right_joint4",
+   "right_joint5",
+   "right_joint6",
+   "right_gripper"
+  ],
+  "low": [
+   -3.2,
+   -3.2,
+   -3.2,
+   -3.2,
+   -3.2,
+   -3.2,
+   0,
+   -3.2,
+   -3.2,
+   -3.2,
+   -3.2,
+   -3.2,
+   -3.2,
+   0
+  ],
+  "high": [
+   3.2,
+   3.2,
+   3.2,
+   3.2,
+   3.2,
+   3.2,
+   1,
+   3.2,
+   3.2,
+   3.2,
+   3.2,
+   3.2,
+   3.2,
+   1
+  ],
+  "maxStep": null,
+  "chunk": "an answer is {actions: (T, 14)}: absolute joint targets in radians and each gripper 1 open to 0 shut; the first 25 rows run, one per control step"
+ },
+ "observation": {
+  "cameras": [
+   {
+    "name": "cam_high",
+    "width": 224,
+    "height": 224,
+    "about": "above the bench's back edge between the arms, looking down at the work surface"
+   },
+   {
+    "name": "cam_left_wrist",
+    "width": 224,
+    "height": 224,
+    "about": "on the left wrist"
+   },
+   {
+    "name": "cam_right_wrist",
+    "width": 224,
+    "height": 224,
+    "about": "on the right wrist"
+   }
+  ],
+  "state": [
+   {
+    "name": "joint_pos",
+    "size": 14,
+    "labels": [
+     "left_joint1",
+     "left_joint2",
+     "left_joint3",
+     "left_joint4",
+     "left_joint5",
+     "left_joint6",
+     "left_gripper",
+     "right_joint1",
+     "right_joint2",
+     "right_joint3",
+     "right_joint4",
+     "right_joint5",
+     "right_joint6",
+     "right_gripper"
+    ]
+   }
+  ],
+  "prompt": "the task's instruction"
+ },
+ "limits": {
+  "maxSteps": 2750,
+  "seconds": 60
+ },
+ "success": [
+  "Nothing moves before the robot starts.",
+  "Nothing overlaps at the start.",
+  "Both finger sides push on the target with at least 0.5 N for 0.2 s.",
+  "Held by the fingers alone, the target rises at least 20 mm.",
+  "The hand lets go and does not touch the target again.",
+  "The target ends within 20 mm of its destination, resting only on its support.",
+  "After release, the target stays upright and still for 2 s.",
+  "No other loose object moves more than 5 mm or turns more than 5 degrees.",
+  "No object jumps further than its velocity allows.",
+  "The target moves without contact only when it falls.",
+  "The routine runs to its end without an error."
+ ]
+}

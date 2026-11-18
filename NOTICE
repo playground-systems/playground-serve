@@ -1,0 +1,144 @@
+Playground Serve
+Copyright 2026 Playground Serve contributors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE). This product includes or fetches the following
+third-party material.
+
+
+openpi, by Physical Intelligence
+https://github.com/Physical-Intelligence/openpi, commit 215abfb217dbac7d5f1273282331b9b1866c0479
+Apache License, Version 2.0 (the same text as LICENSE in this repository)
+
+  - src/playground_serve/client/codec.py: pack_array, unpack_array and resize_with_pad are adapted (modified) from
+    openpi-client's msgpack_numpy.py and image_tools.py.
+  - tests/client/openpi_websocket_policy_server.py: a copy of src/openpi/serving/websocket_policy_server.py with one
+    added line, described at the top of the file.
+  - Not copied here: the GPU worker installs openpi at that commit when it starts (worker/build_env.sh) and serves
+    its policies. The model checkpoints come from openpi's public gs://openpi-assets bucket. They are built on
+    PaliGemma and are subject to the Gemma Terms of Use (openpi's LICENSE_GEMMA.txt).
+
+
+realtime-vla, by Dexmal
+https://github.com/dexmal/realtime-vla, revision eb46c8d
+MIT License
+
+  - src/playground_serve/worker/rtvla_opt/pi05_infer.py: a copy of its pi05_infer.py with two edits, each marked
+    "playground-serve patch". The MIT license text is at the top of that file.
+  - src/playground_serve/worker/fast_policy.py: f32_state_graph is adapted from its Pi05Inference.record_run.
+  - Not copied here: the worker clones pi0_infer.py and convert_from_jax_pi05.py at the same revision when it starts
+    (worker/fastpath.py).
+
+  MIT License
+
+  Copyright (c) 2025 Dexmal
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+
+Data
+
+  - tests/client/data/libero_frames.npz: four frames rendered in the LIBERO simulation benchmark
+    (https://github.com/Lifelong-Robot-Learning/LIBERO).
+  - src/playground_serve/worker/selftest_pi05_libero.json: the first of those frames as JPEG (quality 90), with the
+    actions that stock openpi's pi05_libero returned for it.
+  - src/playground_serve/families/abc_vla/selftest_abc_vla_yam.json and
+    src/playground_serve/families/xiaomi_r1/selftest_xiaomi_r1_robocasa365.json: frames of assets/bottles_real.mp4 in
+    the ABC repository by Amazon FAR (https://github.com/amazon-far/abc, Apache License 2.0), resized and encoded as
+    JPEG, with the actions the models returned for them.
+  - src/playground_serve/families/gr00t_n17/selftest_gr00t_n17_libero.json: frame 80 of episode 0 of
+    demo_data/libero_demo in NVIDIA's Isaac-GR00T repository (https://github.com/NVIDIA/Isaac-GR00T, Apache License
+    2.0), as JPEG, with its recorded state and task and the actions GR00T N1.7 returned for it.
+  - src/playground_serve/families/molmoact2/selftest_molmoact2_*.json: the sample input images of the model cards of
+    allenai/MolmoAct2-LIBERO, -DROID, -SO100_101 and -BimanualYAM on Hugging Face (Ai2, Apache License 2.0; frames
+    from the LIBERO, DROID, Beegbrain/pick_lemon_and_drop_in_bowl and ai2-cortex datasets the cards name), shrunk to
+    128 or 160 pixels wide and encoded as JPEG, with the cards' states and tasks and the actions MolmoAct2 returned.
+  - tests/families/data/droid_obs.json, src/playground_serve/families/cosmos3_policy/selftest_cosmos3_edge_droid.json
+    and src/playground_serve/families/flux3_action/verify_obs.json: frames 60 and 120 of episode 1 of the
+    lerobot/droid_1.0.1 dataset on Hugging Face (DROID; Apache License 2.0 per its card), the three cameras as recorded
+    (180 x 320) encoded as JPEG (quality 90), with their joint and gripper positions and task, and the actions Cosmos 3
+    Edge returned for the first.
+  - src/playground_serve/families/flex_pi/selftest_flex_pi_libero.json: frame 30 of libero_spatial episode 0 of the
+    flex-pi/libero_mujoco3.3.2_depth dataset on Hugging Face (CC BY 4.0), RGB as JPEG (quality 90) and depth as 16-bit
+    PNG, shrunk, with its state and task and the actions Flex-pi returned.
+
+
+MolmoAct2, by the Allen Institute for AI (Ai2)
+https://github.com/allenai/molmoact2, commit 6070080a20321b4f498ab30f28e1d09ac465edb7
+Apache License, Version 2.0
+
+  - Not copied here: the MolmoAct2 worker clones the repository at that commit and downloads the checkpoints from
+    Hugging Face (allenai/MolmoAct2-*) when it starts; their remote code runs there. The README says the model is meant
+    for research and educational use under Ai2's Responsible Use Guidelines.
+
+
+Flex-pi, by The FlexPi Authors
+https://github.com/geyan21/flex-pi, commit b27019ec454aaf5e09f9655368f02a521f6dffa5
+MIT License
+
+  - src/playground_serve/families/flex_pi/serve.py: the tensor helpers of experiments/libero/eval_libero_single.py
+    (per-camera image and depth tensors, camera intrinsics, state normalization, action denormalization and gripper
+    post-processing) are adapted from that file, each cited by its name there.
+  - Not copied here: the Flex-pi worker clones the repository at that commit and downloads the checkpoint from Hugging
+    Face (flex-pi/flexpi-libero, MIT) when it starts.
+
+  MIT License
+
+  Copyright (c) 2026 The FlexPi Authors
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  Except for third-party code and files that retain their original license
+  headers, this repository is released under the MIT License.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+
+SO-ARM100, by TheRobotStudio
+https://github.com/TheRobotStudio/SO-ARM100, commit a758567c3978dfeefe282ede0500085a48fe8f78
+Apache License, Version 2.0
+
+  - Not copied here: `pgs run so101 --sim` downloads Simulation/SO101/so101_new_calib.xml and the 13 meshes it uses
+    (the MuJoCo model of the SO-101 arm) at that commit into the user's cache, checked against SHA-256 sums stored in
+    src/playground_serve/run/sim.py.
+  - docs/assets/so101-sim.gif: images rendered from that model (Apache 2.0, as above) by `pgs run so101 --sim` in a
+    run against molmoact2_so101 on 2026-11-16: the top and side camera views of every 10th tick from tick 250 to 640,
+    shrunk to 320 x 240 each, side by side, at 10 frames per second, with a short fade back to the first frame. The
+    table, cube and bowl are drawn by run/sim.py.
+
+
+LeRobot, by Hugging Face
+https://github.com/huggingface/lerobot, version 0.7.0
+Apache License, Version 2.0
+
+  - Not copied here: `pip install "playground-serve[so101]"` installs it; `pgs run so101` drives the arm with its
+    SO-101 follower driver, calibration files and OpenCV cameras (src/playground_serve/run/so101.py).

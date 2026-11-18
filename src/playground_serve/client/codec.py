@@ -1,0 +1,126 @@
+"""The wire format (openpi's msgpack with raw numpy arrays) and the three image transport modes.
+
+`pack_array`, `unpack_array` and `resize_with_pad` are adapted from openpi-client
+(packages/openpi-client/src/openpi_client/msgpack_numpy.py and image_tools.py at openpi commit
+215abfb217dbac7d5f1273282331b9b1866c0479), Copyright Physical Intelligence, Apache License 2.0. They are copied so that
+this package does not inherit openpi-client's numpy<2 pin and its dm-tree dependency.
+
+Modes, applied to every HxWx3 uint8 array in the observation (nested dicts included):
+  raw     the observation as given; the bytes equal openpi-client's.
+  resize  resize with padding to size x size (or H x W for size (H, W)), the same PIL bilinear code as
+          openpi_client.image_tools.
+  jpeg    resize, then JPEG at `quality`; each image becomes {b"__jpeg__": True, b"data": <bytes>}, which the server
+          turns back into an array with server_decode.decode_images.
+size None keeps every image at its own size (the server's metadata "image_size": "native"): resize then sends it
+unchanged and jpeg only encodes it, for models whose own preprocessing resizes the camera frame.
+With stacks=True (servers whose features say "jpeg_stack": true) lists are walked as well, and a (T, H, W, 3) uint8
+stack of frames is resized frame by frame; in jpeg mode it becomes {b"__jpeg_stack__": True, b"frames": [<bytes>...]}.
+"""
+
+from __future__ import annotations
+
+import io
+
+import msgpack
+import numpy as np
+from PIL import Image
+
+MODES = ("raw", "resize", "jpeg")
+JPEG_KEY = b"__jpeg__"
+JPEG_STACK_KEY = b"__jpeg_stack__"
+
+
+def pack_array(obj):
+    if isinstance(obj, (np.ndarray, np.generic)) and obj.dtype.kind in ("V", "O", "c"):
+        raise ValueError(f"Unsupported dtype: {obj.dtype}")
+    if isinstance(obj, np.ndarray):
+        return {b"__ndarray__": True, b"data": obj.tobytes(), b"dtype": obj.dtype.str, b"shape": obj.shape}
+    if isinstance(obj, np.generic):
+        return {b"__npgeneric__": True, b"data": obj.item(), b"dtype": obj.dtype.str}
+    return obj
+
+
+def unpack_array(obj):
+    if b"__ndarray__" not in obj and b"__npgeneric__" not in obj:
+        return obj
+    dtype = np.dtype(obj[b"dtype"])
+    # Object arrays interpret the wire bytes as Python pointers. Reject them on input,
+    # including structured/subarray dtypes containing objects, before constructing anything.
+    if dtype.hasobject or dtype.kind not in "biufSU" or not 0 < dtype.itemsize <= 32 * 1024 * 1024:
+        raise ValueError("unsupported wire dtype")
+    data = obj[b"data"]
+    if b"__ndarray__" in obj:
+        shape = obj[b"shape"]
+        if not isinstance(shape, (list, tuple)) or len(shape) > 32:
+            raise ValueError("invalid wire shape")
+        count = 1
+        for dim in shape:
+            if type(dim) is not int or dim < 0 or dim > 32 * 1024 * 1024:
+                raise ValueError("invalid wire dimension")
+            count *= dim
+            if count * dtype.itemsize > 32 * 1024 * 1024:
+                raise ValueError("wire array too large")
+        if not isinstance(data, bytes) or len(data) != count * dtype.itemsize:
+            raise ValueError("wire array byte length does not match shape")
+        return np.ndarray(buffer=data, dtype=dtype, shape=shape)
+    if not isinstance(data, (bool, int, float, str, bytes)):
+        raise ValueError("invalid wire scalar")
+    return dtype.type(data)
+
+
+def packb(obj) -> bytes:
+    return msgpack.packb(obj, default=pack_array)
+
+
+def unpackb(data: bytes):
+    return msgpack.unpackb(data, object_hook=unpack_array)
+
+
+def resize_with_pad(image: np.ndarray, height: int, width: int) -> np.ndarray:
+    """One HxWx3 uint8 image, resized without distortion and padded with zeros (tf.image.resize_with_pad via PIL)."""
+    if image.shape[:2] == (height, width):
+        return image
+    pil = Image.fromarray(image)
+    cur_width, cur_height = pil.size
+    ratio = max(cur_width / width, cur_height / height)
+    resized_height, resized_width = int(cur_height / ratio), int(cur_width / ratio)
+    resized = pil.resize((resized_width, resized_height), resample=Image.BILINEAR)
+    out = Image.new(resized.mode, (width, height), 0)
+    out.paste(resized, (max(0, int((width - resized_width) / 2)), max(0, int((height - resized_height) / 2))))
+    return np.asarray(out)
+
+
+def is_image(value) -> bool:
+    return isinstance(value, np.ndarray) and value.dtype == np.uint8 and value.ndim == 3 and value.shape[-1] == 3
+
+
+def encode_jpeg(image: np.ndarray, quality: int) -> bytes:
+    buf = io.BytesIO()
+    Image.fromarray(image).save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
+
+
+def is_stack(value) -> bool:
+    return isinstance(value, np.ndarray) and value.dtype == np.uint8 and value.ndim == 4 and value.shape[-1] == 3
+
+
+def encode_images(obs, mode: str, size=224, quality: int = 90, stacks: bool = False):
+    """Return a copy of `obs` with its images transformed for `mode`; other values are unchanged. `size` is an int,
+    (H, W), or None to keep each image's own size. `stacks`: also lists and (T, H, W, 3) frame stacks."""
+    if mode == "raw":
+        return obs
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
+    if isinstance(obs, dict):
+        return {k: encode_images(v, mode, size, quality, stacks) for k, v in obs.items()}
+    if stacks and isinstance(obs, (list, tuple)):
+        return [encode_images(v, mode, size, quality, stacks) for v in obs]
+    if stacks and is_stack(obs):
+        frames = [encode_images(frame, mode, size, quality) for frame in obs]
+        return ({JPEG_STACK_KEY: True, b"frames": [f[b"data"] for f in frames]} if mode == "jpeg"
+                else np.stack(frames))
+    if not is_image(obs):
+        return obs
+    height, width = obs.shape[:2] if size is None else (size, size) if isinstance(size, int) else size
+    image = resize_with_pad(obs, height, width)
+    return {JPEG_KEY: True, b"data": encode_jpeg(image, quality)} if mode == "jpeg" else image
